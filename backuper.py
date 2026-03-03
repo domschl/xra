@@ -163,7 +163,6 @@ def main():
             print(f"Deleted:      {result['deleted']}")
             if result['created'] + result['transferred'] + result['deleted'] == 0:
                 print("No changes")
-                summary['ok_tasks'] += 1
                 continue
             if result['deleted'] > 0:
                 print(f"Continue? WARNING DELETING {result['deleted']} FILES (y/n): ", end="")
@@ -199,13 +198,13 @@ def main():
 
     if len(task_names) > 1:
         print("==== Summary ====")
-        print(f"OK tasks:     {summary['ok_tasks']}")
+        print(f"OK tasks:       {summary['ok_tasks']}")
         print(f"Skipped tasks:  {summary['skipped_tasks']}")
-        print(f"Error tasks:  {summary['error_tasks']}")
-        print(f"Files:        {summary['files']}")
-        print(f"Created:      {summary['created']}")
-        print(f"Transferred:  {summary['transferred']}")
-        print(f"Deleted:      {summary['deleted']}")
+        print(f"Error tasks:    {summary['error_tasks']}")
+        print(f"Files:          {summary['files']}")
+        print(f"Created:        {summary['created']}")
+        print(f"Transferred:    {summary['transferred']}")
+        print(f"Deleted:        {summary['deleted']}")
 
 if __name__ == "__main__":
     main()
