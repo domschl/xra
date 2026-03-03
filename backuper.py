@@ -131,6 +131,7 @@ def main():
 
     summary = {
         'ok_tasks': 0,
+        'skipped_tasks': 0,
         'error_tasks': 0,
         'files': 0,
         'created': 0,
@@ -170,7 +171,7 @@ def main():
                 print("Continue? (y/n): ", end="")
             ans = input()
             if ans != "y":
-                summary['error_tasks'] += 1
+                summary['skipped_tasks'] += 1
                 continue
 
         result = rsync_backup(task['src'], task['dst'], dry_run = False, delete = task['delete'])
@@ -199,6 +200,7 @@ def main():
     if len(task_names) > 1:
         print("==== Summary ====")
         print(f"OK tasks:     {summary['ok_tasks']}")
+        print(f"Skipped tasks:  {summary['skipped_tasks']}")
         print(f"Error tasks:  {summary['error_tasks']}")
         print(f"Files:        {summary['files']}")
         print(f"Created:      {summary['created']}")
