@@ -6,7 +6,7 @@ import socket
 import json
 
 
-def rsync_backup(src: str, dst: str, dry_run:bool = True, delete:bool = False):
+def rsync_backup(src: str, dst: str, options: list = [], dry_run:bool = True, delete:bool = False):
     src = os.path.expanduser(src)
     dst = os.path.expanduser(dst)
     print(f"Backup {src} to {dst}")
@@ -17,7 +17,7 @@ def rsync_backup(src: str, dst: str, dry_run:bool = True, delete:bool = False):
     if ':' not in dst and not os.path.exists(dst):
         result['error'] = f"Destination directory {dst} does not exist"
         return result
-    rsync_cmd = ["rsync", "-avz", "--stats"]
+    rsync_cmd = ["rsync", "-avz", "--stats"] + options
     if dry_run:
         rsync_cmd.append("--dry-run")
     if src[-1] != "/":
@@ -151,7 +151,7 @@ def main():
             sys.exit(1)
 
         if args.no_confirm is False:        
-            result = rsync_backup(task['src'], task['dst'], dry_run = True, delete = task['delete'])
+            result = rsync_backup(task['src'], task['dst'], options=task['options'], dry_run = True, delete = task['delete'])
             if result['error']:
                 print(result['error'])
                 sys.exit(1)
