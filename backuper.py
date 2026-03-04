@@ -7,12 +7,14 @@ import json
 
 
 def rsync_backup(src: str, dst: str, dry_run:bool = True, delete:bool = False):
+    src = os.path.expanduser(src)
+    dst = os.path.expanduser(dst)
     print(f"Backup {src} to {dst}")
     result = {'error': None}
-    if not os.path.exists(src):
+    if ':' not in src and not os.path.exists(src):
         result['error'] = f"Source directory {src} does not exist"
         return result
-    if not os.path.exists(dst):
+    if ':' not in dst and not os.path.exists(dst):
         result['error'] = f"Destination directory {dst} does not exist"
         return result
     rsync_cmd = ["rsync", "-avz", "--stats"]
@@ -49,7 +51,7 @@ def rsync_backup(src: str, dst: str, dry_run:bool = True, delete:bool = False):
         ("Total bytes sent", "bytes_sent"),
         ("Total bytes received", "bytes_received"),
     ]
-    mandatory_fields = ["files", "created", "deleted", "transferred", "size", "transferred_size"]
+    mandatory_fields = ["files", "created", "transferred", "size", "transferred_size"]  # "deleted", 
     file_list = []
     delete_list = []
     for line in proc_result.stdout.split("\n")[1:]:
@@ -68,7 +70,7 @@ def rsync_backup(src: str, dst: str, dry_run:bool = True, delete:bool = False):
             if len(toks) < 2:
                 continue
             if toks[0].strip() == field[0]:
-                val = toks[1].strip().split(" ")[0].strip()
+                val = toks[1].strip().split(" ")[0].strip().replace(",","")
                 try:
                     if '.' in val:
                         val = float(val)
@@ -81,7 +83,7 @@ def rsync_backup(src: str, dst: str, dry_run:bool = True, delete:bool = False):
                 break
     for field in mandatory_fields:
         if field not in result:
-            result['error'] = f"Mandatory field {field} not found in rsync result: {proc_result.stdout}"
+            result['error'] = f"Mandatory field {field} not found in rsync result: {list(result.keys())}"
     return result
 
 def get_config(filename: str):
@@ -111,7 +113,7 @@ def get_config(filename: str):
 
 def main():
     parser = argparse.ArgumentParser(description="Backup files using rsync")
-    parser.add_argument("task_name", type=str, help="Task name")
+    parser.add_argument("task_name", type=str, help="Task name or group name or 'all'")
     parser.add_argument("--no-confirm", "-x", action="store_true", help="Do not confirm the backup")
     parser.add_argument("--verbose", "-v", action="store_true", help="Print verbose output")
     args = parser.parse_args()
@@ -124,10 +126,14 @@ def main():
         print(f"Task {args.task_name} not found in config {filename}, available tasks: {list(config.keys())} (or 'all')")
         sys.exit(1)
     
-    if args.task_name == 'all':
-        task_names = list(config.keys())
-    else:
-        task_names = [args.task_name]
+    task_names = []
+    for config_task in list(config.keys()):
+        if args.task_name == 'all':
+            task_names.append(config_task)
+        elif args.task_name in config[config_task]['groups']:
+            task_names.append(config_task)
+        elif args.task_name == config_task:
+            task_names.append(config_task)
 
     summary = {
         'ok_tasks': 0,
@@ -157,15 +163,16 @@ def main():
                 print("Files to be deleted:")
                 for file in result['delete_list']:
                     print(f"  {file}")
+            n_del = result['deleted'] if 'deleted' in result else len(result['delete_list'])
             print(f"Files:        {result['files']}")
             print(f"Created:      {result['created']}")
             print(f"Transferred:  {result['transferred']}")
-            print(f"Deleted:      {result['deleted']}")
-            if result['created'] + result['transferred'] + result['deleted'] == 0:
+            print(f"Deleted:      {n_del}")
+            if result['created'] + result['transferred'] + n_del == 0:
                 print("No changes")
                 continue
-            if result['deleted'] > 0:
-                print(f"Continue? WARNING DELETING {result['deleted']} FILES (y/n): ", end="")
+            if n_del > 0:
+                print(f"Continue? WARNING DELETING {n_del} FILES (y/n): ", end="")
             else:
                 print("Continue? (y/n): ", end="")
             ans = input()
@@ -189,12 +196,12 @@ def main():
         print(f"Files:        {result['files']}")
         print(f"Created:      {result['created']}")
         print(f"Transferred:  {result['transferred']}")
-        print(f"Deleted:      {result['deleted']}")
+        print(f"Deleted:      {n_del}")
         summary['ok_tasks'] += 1
         summary['files'] += result['files']
         summary['created'] += result['created']
         summary['transferred'] += result['transferred']
-        summary['deleted'] += result['deleted']
+        summary['deleted'] += n_del
 
     if len(task_names) > 1:
         print("==== Summary ====")
