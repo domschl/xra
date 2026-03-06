@@ -18,7 +18,8 @@ def get_local_disk_info(path: str):
         return None
 
 
-def rsync_backup(src: str, dst: str, excludes: list[str] = [], options: list[str] = [], dry_run:bool = True, delete:bool = False):
+def rsync_backup(src: str, dst: str, excludes: list[str] = [], 
+                 options: list[str] = [], dry_run:bool = True, delete:bool = False):
     src = os.path.expanduser(src)
     dst = os.path.expanduser(dst)
     print(f"Backup {src} to {dst}")
@@ -29,10 +30,10 @@ def rsync_backup(src: str, dst: str, excludes: list[str] = [], options: list[str
     if ':' not in dst and not os.path.exists(dst):
         result['error'] = f"Destination directory {dst} does not exist"
         return result
-    if options != []:
-        rsync_cmd = ["rsync", "-avz", "--stats"] + options
+    if options == []:
+        rsync_cmd = ["rsync", "-avz", "--stats"]
     else:
-        rsync_cmd = options
+        rsync_cmd = ["rsync"] + options
         if "--stats" not in rsync_cmd:
             rsync_cmd.append("--stats")
     if dry_run:
@@ -111,6 +112,7 @@ def get_config(filename: str):
         print(f"Config file {filename} not found")
         default_config = {
             "task1": {
+                "description": "",
                 "src": "",
                 "dst": "",
                 "delete": False,
@@ -120,6 +122,7 @@ def get_config(filename: str):
                 "conditions": []
             },
             "task2": {
+                "description": "",
                 "src": "",
                 "dst": "",
                 "delete": False,
@@ -141,7 +144,7 @@ def get_config(filename: str):
 
 def eval_conditions(task):
     for condition in task['conditions']:
-        condition = condition.replace("{{local-hostname}}", socket.gethostname())
+        condition = condition.replace("{{local-hostname}}", socket.gethostname()).replace("{{local-platform}}", sys.platform)
         if "{{destination-capacity}}" in condition:
             dst = os.expanduser(task['dst'])
             if ':' in dst:
@@ -163,6 +166,12 @@ def main():
     parser.add_argument("--verbose", "-v", action="store_true", help="Print verbose output")
     args = parser.parse_args()
 
+    config_filename = args.config
+    if '/' not in config_filename:
+        config_filename = os.path.expanduser("~/.config/xra/" + config_filename)
+    if config_filename.endswith('.json') is False:
+        config_filename += '.json'
+        
     config = get_config(args.config)
     hostname = socket.gethostname()
     filename = os.path.expanduser("~/.config/xra/" + hostname + ".json")
@@ -197,6 +206,28 @@ def main():
             print(f"Task {task_name} is not properly configured in {filename}")
             sys.exit(1)
 
+        dst = os.path.expanduser(task['dst'])
+        if ':' not in dst:
+            if not os.path.exists(dst):
+                summary['skipped_tasks'] += 1
+                continue
+        else:
+            dst_host = dst.split(':')[0]
+            if dst_host == hostname:
+                summary['skipped_tasks'] += 1
+                continue
+                
+        src = os.path.expanduser(task['src'])
+        if ':' not in src:
+            if not os.path.exists(src):
+                summary['skipped_tasks'] += 1
+                continue
+        else:
+            src_host = src.split(':')[0]
+            if src_host == hostname:
+                summary['skipped_tasks'] += 1
+                continue
+
         if 'conditions' in task:
             if eval_conditions(task) is False:
                 summary['skipped_tasks'] += 1
@@ -208,6 +239,7 @@ def main():
                 print(result['error'])
                 sys.exit(1)
             print(f"---- Task {task_name} (dry run) ----")
+            print(task['description'])
             if args.verbose:
                 print("Files to be transferred:")
                 for file in result['file_list']:
