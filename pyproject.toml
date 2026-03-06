@@ -1,7 +1,7 @@
 [project]
-name = "backuper"
+name = "xra"
 version = "0.1.0"
-description = "Add your description here"
+description = "Archiving tool using rsync"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = []

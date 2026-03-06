@@ -158,14 +158,14 @@ def eval_conditions(task):
 def main():
     parser = argparse.ArgumentParser(description="Backup files using rsync")
     parser.add_argument("task_name", type=str, help="Task name or group name or 'all'")
-    parser.add_argument("--config", "-c", type=str, default=os.path.expanduser("~/.config/backuper/config.json"), help="Config file path")
+    parser.add_argument("--config", "-c", type=str, default=os.path.expanduser("~/.config/xra/config.json"), help="Config file path")
     parser.add_argument("--no-confirm", "-x", action="store_true", help="Do not confirm the backup")
     parser.add_argument("--verbose", "-v", action="store_true", help="Print verbose output")
     args = parser.parse_args()
 
     config = get_config(args.config)
     hostname = socket.gethostname()
-    filename = os.path.expanduser("~/.config/backuper/" + hostname + ".json")
+    filename = os.path.expanduser("~/.config/xra/" + hostname + ".json")
     if os.path.exists(filename):
         config.update(get_config(filename))
 
