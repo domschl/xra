@@ -4,9 +4,21 @@ import subprocess
 import argparse
 import socket
 import json
+import shutil
 
 
-def rsync_backup(src: str, dst: str, options: list = [], dry_run:bool = True, delete:bool = False):
+def get_local_disk_info(path: str):
+    if ':' in path:
+        return None
+    path = os.path.expanduser(path)
+    try:
+        usage = shutil.disk_usage(path)
+        return usage.total
+    except Exception:
+        return None
+
+
+def rsync_backup(src: str, dst: str, excludes: list[str] = [], options: list[str] = [], dry_run:bool = True, delete:bool = False):
     src = os.path.expanduser(src)
     dst = os.path.expanduser(dst)
     print(f"Backup {src} to {dst}")
@@ -17,7 +29,12 @@ def rsync_backup(src: str, dst: str, options: list = [], dry_run:bool = True, de
     if ':' not in dst and not os.path.exists(dst):
         result['error'] = f"Destination directory {dst} does not exist"
         return result
-    rsync_cmd = ["rsync", "-avz", "--stats"] + options
+    if options != []:
+        rsync_cmd = ["rsync", "-avz", "--stats"] + options
+    else:
+        rsync_cmd = options
+        if "--stats" not in rsync_cmd:
+            rsync_cmd.append("--stats")
     if dry_run:
         rsync_cmd.append("--dry-run")
     if src[-1] != "/":
@@ -28,6 +45,9 @@ def rsync_backup(src: str, dst: str, options: list = [], dry_run:bool = True, de
     rsync_cmd.append(dst)
     if delete:
         rsync_cmd.append("--delete")
+    for exclude in excludes:
+        rsync_cmd.append("--exclude")
+        rsync_cmd.append(exclude)
     try:
         proc_result = subprocess.run(rsync_cmd, check=True, capture_output=True, text=True)
         result['stdout'] = proc_result.stdout
@@ -93,12 +113,20 @@ def get_config(filename: str):
             "task1": {
                 "src": "",
                 "dst": "",
-                "delete": False
+                "delete": False,
+                "excludes": [],
+                "options": [],
+                "groups": [],
+                "conditions": []
             },
             "task2": {
                 "src": "",
                 "dst": "",
-                "delete": False
+                "delete": False,
+                "excludes": [],
+                "options": [],
+                "groups": [],
+                "conditions": []
             }
         }
         base_dir = os.path.dirname(filename)
@@ -111,16 +139,35 @@ def get_config(filename: str):
     with open(filename, "r") as f:
         return json.load(f)
 
+def eval_conditions(task):
+    for condition in task['conditions']:
+        condition = condition.replace("{{local-hostname}}", socket.gethostname())
+        if "{{destination-capacity}}" in condition:
+            dst = os.expanduser(task['dst'])
+            if ':' in dst:
+                return False
+            capacity = get_local_disk_info(dst)
+            if capacity is None:
+                return False
+            condition = condition.replace("{{destination-capacity}}", str(capacity))
+            print(f"Capacity condition: {condition}")
+        if eval(condition) is False:
+            return False
+    return True
+
 def main():
     parser = argparse.ArgumentParser(description="Backup files using rsync")
     parser.add_argument("task_name", type=str, help="Task name or group name or 'all'")
+    parser.add_argument("--config", "-c", type=str, default=os.path.expanduser("~/.config/backuper/config.json"), help="Config file path")
     parser.add_argument("--no-confirm", "-x", action="store_true", help="Do not confirm the backup")
     parser.add_argument("--verbose", "-v", action="store_true", help="Print verbose output")
     args = parser.parse_args()
 
+    config = get_config(args.config)
     hostname = socket.gethostname()
     filename = os.path.expanduser("~/.config/backuper/" + hostname + ".json")
-    config = get_config(filename)
+    if os.path.exists(filename):
+        config.update(get_config(filename))
 
     if args.task_name not in config and args.task_name != 'all':
         print(f"Task {args.task_name} not found in config {filename}, available tasks: {list(config.keys())} (or 'all')")
@@ -146,12 +193,17 @@ def main():
     }
     for task_name in task_names:
         task = config[task_name]
-        if 'src' not in task or 'dst' not in task or 'delete' not in task or not task['src'] or not task['dst']:
+        if 'src' not in task or 'dst' not in task or 'delete' not in task or 'excludes' not in task or not task['src'] or not task['dst']:
             print(f"Task {task_name} is not properly configured in {filename}")
             sys.exit(1)
 
+        if 'conditions' in task:
+            if eval_conditions(task) is False:
+                summary['skipped_tasks'] += 1
+                continue
+
         if args.no_confirm is False:        
-            result = rsync_backup(task['src'], task['dst'], options=task['options'], dry_run = True, delete = task['delete'])
+            result = rsync_backup(task['src'], task['dst'], excludes=task['excludes'], options=task['options'], dry_run = True, delete = task['delete'])
             if result['error']:
                 print(result['error'])
                 sys.exit(1)
@@ -180,7 +232,7 @@ def main():
                 summary['skipped_tasks'] += 1
                 continue
 
-        result = rsync_backup(task['src'], task['dst'], dry_run = False, delete = task['delete'])
+        result = rsync_backup(task['src'], task['dst'], excludes=task['excludes'], options=task['options'], dry_run = False, delete = task['delete'])
         print(f"---- Task {task_name} ----")
         if result['error']:
             print(f"Error: {result['error']}")
