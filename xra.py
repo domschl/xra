@@ -160,10 +160,12 @@ def eval_conditions(task):
 
 def main():
     parser = argparse.ArgumentParser(description="Backup files using rsync")
-    parser.add_argument("task_name", type=str, help="Task name or group name or 'all'")
-    parser.add_argument("--config", "-c", type=str, default=os.path.expanduser("~/.config/xra/config.json"), help="Config file path")
+    parser.add_argument("task_name", nargs='?', type=str, default='all', help="Task name or group name or 'all'")
+    default_config = os.path.expanduser("~/.config/xra/config.json")
+    parser.add_argument("--config", "-c", type=str, default=default_config, help="Config file path")
     parser.add_argument("--no-confirm", "-x", action="store_true", help="Do not confirm the backup")
     parser.add_argument("--verbose", "-v", action="store_true", help="Print verbose output")
+    parser.add_argument("--list-tasks", "-l", action="store_true", help="List available tasks")
     args = parser.parse_args()
 
     config_filename = args.config
@@ -173,10 +175,11 @@ def main():
         config_filename += '.json'
         
     config = get_config(args.config)
-    hostname = socket.gethostname()
-    filename = os.path.expanduser("~/.config/xra/" + hostname + ".json")
-    if os.path.exists(filename):
-        config.update(get_config(filename))
+    if (args.config == default_config):
+        hostname = socket.gethostname()
+        filename = os.path.expanduser("~/.config/xra/" + hostname + ".json")
+        if os.path.exists(filename):
+            config.update(get_config(filename))
 
     if args.task_name not in config and args.task_name != 'all':
         print(f"Task {args.task_name} not found in config {filename}, available tasks: {list(config.keys())} (or 'all')")
@@ -190,6 +193,14 @@ def main():
             task_names.append(config_task)
         elif args.task_name == config_task:
             task_names.append(config_task)
+
+    if args.list_tasks:
+        print("Configured tasks:")
+        for task_name in task_names:
+            task = config[task_name]
+            print(f"{task_name}: {task['description']}")
+            print(f"  {task['src']} ➔  {task['dst']}")
+        sys.exit(0)
 
     summary = {
         'ok_tasks': 0,
