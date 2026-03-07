@@ -5,7 +5,38 @@ import argparse
 import socket
 import json
 import shutil
+from typing import TypedDict, cast
 
+class RsyncResult(TypedDict):
+    error: str | None
+    stdout: str | None
+    stderr: str | None
+    returncode: int | None
+    files: int | None
+    created: int | None
+    deleted: int | None
+    transferred: int | None
+    size: int | None
+    transferred_size: int | None
+    literal: int | None
+    matched: int | None
+    file_list_size: int | None
+    file_list_generation_time: int | None
+    file_list_transfer_time: int | None
+    bytes_sent: int | None
+    bytes_received: int | None
+    file_list: list[str] | None
+    delete_list: list[str] | None
+
+class XraTask(TypedDict):
+    description: str
+    src: str
+    dst: str
+    delete: bool
+    excludes: list[str]
+    options: list[str]
+    groups: list[str]
+    conditions: list[str]
 
 def get_local_disk_info(path: str):
     if ':' in path:
@@ -18,19 +49,23 @@ def get_local_disk_info(path: str):
         return None
 
 
-def rsync_backup(src: str, dst: str, excludes: list[str] = [], 
-                 options: list[str] = [], dry_run:bool = True, delete:bool = False):
+def rsync_backup(src: str, dst: str, excludes: list[str] | None = None, 
+                 options: list[str] | None = None, dry_run:bool = True, delete:bool = False) -> RsyncResult:
     src = os.path.expanduser(src)
     dst = os.path.expanduser(dst)
     print(f"Backup {src} to {dst}")
-    result = {'error': None}
+    result: RsyncResult = {'error': None, 'stdout': None, 'stderr': None, 'returncode': None, 
+                           'files': None, 'created': None, 'deleted': None, 'transferred': None, 
+                           'size': None, 'transferred_size': None, 'literal': None, 'matched': None, 
+                           'file_list_size': None, 'file_list_generation_time': None, 'file_list_transfer_time': None, 
+                           'bytes_sent': None, 'bytes_received': None, 'file_list': None, 'delete_list': None}
     if ':' not in src and not os.path.exists(src):
         result['error'] = f"Source directory {src} does not exist"
         return result
     if ':' not in dst and not os.path.exists(dst):
         result['error'] = f"Destination directory {dst} does not exist"
         return result
-    if options == []:
+    if options is None or options == []:
         rsync_cmd = ["rsync", "-avz", "--stats"]
     else:
         rsync_cmd = ["rsync"] + options
@@ -46,16 +81,17 @@ def rsync_backup(src: str, dst: str, excludes: list[str] = [],
     rsync_cmd.append(dst)
     if delete:
         rsync_cmd.append("--delete")
-    for exclude in excludes:
-        rsync_cmd.append("--exclude")
-        rsync_cmd.append(exclude)
+    if excludes is not None:
+        for exclude in excludes:
+            rsync_cmd.append("--exclude")
+            rsync_cmd.append(exclude)
     try:
         proc_result = subprocess.run(rsync_cmd, check=True, capture_output=True, text=True)
         result['stdout'] = proc_result.stdout
         result['stderr'] = proc_result.stderr
         result['returncode'] = proc_result.returncode
     except subprocess.CalledProcessError as e:
-        result['error'] = f"Error: {e}\nStdout: {e.stdout}\nStderr: {e.stderr}"
+        result['error'] = f"Error: {e}\nStdout: {e.stdout}\nStderr: {e.stderr}"  # pyright: ignore[reportAny]
         return result
     fields = [
         ("Number of files", "files"),
@@ -73,8 +109,8 @@ def rsync_backup(src: str, dst: str, excludes: list[str] = [],
         ("Total bytes received", "bytes_received"),
     ]
     mandatory_fields = ["files", "created", "transferred", "size", "transferred_size"]  # "deleted", 
-    file_list = []
-    delete_list = []
+    file_list:list[str] = []
+    delete_list:list[str] = []
     for line in proc_result.stdout.split("\n")[1:]:
         if not line.strip() or ":" in line:
             break
@@ -107,10 +143,10 @@ def rsync_backup(src: str, dst: str, excludes: list[str] = [],
             result['error'] = f"Mandatory field {field} not found in rsync result: {list(result.keys())}"
     return result
 
-def get_config(filename: str):
+def get_config(filename: str) -> dict[str, XraTask]:
     if not os.path.exists(filename):
         print(f"Config file {filename} not found")
-        default_config = {
+        default_config: dict[str, XraTask] = {
             "task1": {
                 "description": "",
                 "src": "",
@@ -140,13 +176,18 @@ def get_config(filename: str):
         print(f"Created default config file {filename}, please edit it and try again")
         sys.exit(1)
     with open(filename, "r") as f:
-        return json.load(f)
+        try:
+            tasks:dict[str, XraTask] = cast(dict[str, XraTask], json.load(f))
+        except Exception as e:
+            print(f"Error loading config file {filename}: {e}")
+            sys.exit(1)
+    return tasks
 
-def eval_conditions(task):
+def eval_conditions(task: XraTask) -> bool:
     for condition in task['conditions']:
         condition = condition.replace("{{local-hostname}}", socket.gethostname()).replace("{{local-platform}}", sys.platform)
         if "{{destination-capacity}}" in condition:
-            dst = os.expanduser(task['dst'])
+            dst = os.path.expanduser(task['dst'])
             if ':' in dst:
                 return False
             capacity = get_local_disk_info(dst)
@@ -160,41 +201,42 @@ def eval_conditions(task):
 
 def main():
     parser = argparse.ArgumentParser(description="Backup files using rsync")
-    parser.add_argument("task_name", nargs='?', type=str, default='all', help="Task name or group name or 'all'")
+    _ = parser.add_argument("task_name", nargs='?', type=str, default='all', help="Task name or group name or 'all'")
     default_config = os.path.expanduser("~/.config/xra/config.json")
-    parser.add_argument("--config", "-c", type=str, default=default_config, help="Config file path")
-    parser.add_argument("--no-confirm", "-x", action="store_true", help="Do not confirm the backup")
-    parser.add_argument("--verbose", "-v", action="store_true", help="Print verbose output")
-    parser.add_argument("--list-tasks", "-l", action="store_true", help="List available tasks")
+    _ = parser.add_argument("--config", "-c", type=str, default=default_config, help="Config file path")
+    _ = parser.add_argument("--no-confirm", "-x", action="store_true", help="Do not confirm the backup")
+    _ = parser.add_argument("--verbose", "-v", action="store_true", help="Print verbose output")
+    _ = parser.add_argument("--list-tasks", "-l", action="store_true", help="List available tasks")
     args = parser.parse_args()
 
-    config_filename = args.config
+    config_filename = cast(str, args.config)
     if '/' not in config_filename:
         config_filename = os.path.expanduser("~/.config/xra/" + config_filename)
     if config_filename.endswith('.json') is False:
         config_filename += '.json'
         
-    config = get_config(args.config)
-    if (args.config == default_config):
-        hostname = socket.gethostname()
+    config = get_config(config_filename)
+    hostname = socket.gethostname()
+    if (config_filename == default_config):
         filename = os.path.expanduser("~/.config/xra/" + hostname + ".json")
         if os.path.exists(filename):
             config.update(get_config(filename))
 
-    if args.task_name not in config and args.task_name != 'all':
-        print(f"Task {args.task_name} not found in config {filename}, available tasks: {list(config.keys())} (or 'all')")
+    task_name = cast(str, args.task_name)
+    if task_name not in config and task_name != 'all':
+        print(f"Task {task_name} not found in config {config_filename}, available tasks: {list(config.keys())} (or 'all')")
         sys.exit(1)
     
-    task_names = []
+    task_names: list[str] = []
     for config_task in list(config.keys()):
-        if args.task_name == 'all':
+        if task_name == 'all':
             task_names.append(config_task)
-        elif args.task_name in config[config_task]['groups']:
+        elif task_name in config[config_task]['groups']:
             task_names.append(config_task)
-        elif args.task_name == config_task:
+        elif task_name == config_task:
             task_names.append(config_task)
 
-    if args.list_tasks:
+    if cast(bool, args.list_tasks):
         print("Configured tasks:")
         for task_name in task_names:
             task = config[task_name]
@@ -214,7 +256,7 @@ def main():
     for task_name in task_names:
         task = config[task_name]
         if 'src' not in task or 'dst' not in task or 'delete' not in task or 'excludes' not in task or not task['src'] or not task['dst']:
-            print(f"Task {task_name} is not properly configured in {filename}")
+            print(f"Task {task_name} is not properly configured in configurations")
             sys.exit(1)
 
         dst = os.path.expanduser(task['dst'])
@@ -251,20 +293,35 @@ def main():
                 sys.exit(1)
             print(f"---- Task {task_name} (dry run) ----")
             print(task['description'])
-            if args.verbose:
-                print("Files to be transferred:")
-                for file in result['file_list']:
-                    print(f"  {file}")
-                print("Files to be deleted:")
-                for file in result['delete_list']:
-                    print(f"  {file}")
-            n_del = result['deleted'] if 'deleted' in result else len(result['delete_list'])
+            if cast(bool, args.verbose):
+                if result['file_list']:
+                    print("Files to be transferred:")
+                    for file in result['file_list']:
+                        print(f"  {file}")
+                if result['delete_list']:
+                    print("Files to be deleted:")
+                    for file in result['delete_list']:
+                        print(f"  {file}")
+            
+            if result['delete_list'] is not None:
+                n_del = len(result['delete_list'])
+            else:
+                n_del = 0
+            if result['deleted'] is not None:
+                n_del = result['deleted']
             print(f"Files:        {result['files']}")
             print(f"Created:      {result['created']}")
             print(f"Transferred:  {result['transferred']}")
             print(f"Deleted:      {n_del}")
-            if result['created'] + result['transferred'] + n_del == 0:
+            num_changes = 0
+            if result['created']:
+                num_changes += result['created']
+            if result['transferred']:
+                num_changes += result['transferred']
+            num_changes += n_del
+            if num_changes == 0:
                 print("No changes")
+                summary['ok_tasks'] += 1
                 continue
             if n_del > 0:
                 print(f"Continue? WARNING DELETING {n_del} FILES (y/n): ", end="")
@@ -281,21 +338,32 @@ def main():
             print(f"Error: {result['error']}")
             summary['error_tasks'] += 1
             continue
-        if args.verbose:
-            print("Files transferred:")
-            for file in result['file_list']:
-                print(f"  {file}")
-            print("Files deleted:")
-            for file in result['delete_list']:
-                print(f"  {file}")
+        if cast(bool, args.verbose):
+            if result['file_list']:
+                print("Files transferred:")
+                for file in result['file_list']:
+                    print(f"  {file}")
+            if result['delete_list']:
+                print("Files deleted:")
+                for file in result['delete_list']:
+                    print(f"  {file}")
+        if result['delete_list'] is not None:
+            n_del = len(result['delete_list'])
+        else:
+            n_del = 0
+        if result['deleted'] is not None:
+            n_del = result['deleted']
         print(f"Files:        {result['files']}")
         print(f"Created:      {result['created']}")
         print(f"Transferred:  {result['transferred']}")
         print(f"Deleted:      {n_del}")
         summary['ok_tasks'] += 1
-        summary['files'] += result['files']
-        summary['created'] += result['created']
-        summary['transferred'] += result['transferred']
+        if result['files']:
+            summary['files'] += result['files']
+        if result['created']:
+            summary['created'] += result['created']
+        if result['transferred']:
+            summary['transferred'] += result['transferred']
         summary['deleted'] += n_del
 
     if len(task_names) > 1:
