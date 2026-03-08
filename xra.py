@@ -16,15 +16,6 @@ class RsyncResult(TypedDict):
     created: int | None
     deleted: int | None
     transferred: int | None
-    size: int | None
-    transferred_size: int | None
-    literal: int | None
-    matched: int | None
-    file_list_size: int | None
-    file_list_generation_time: int | None
-    file_list_transfer_time: int | None
-    bytes_sent: int | None
-    bytes_received: int | None
     file_list: list[str] | None
     delete_list: list[str] | None
 
@@ -56,9 +47,7 @@ def rsync_backup(src: str, dst: str, excludes: list[str] | None = None,
     print(f"Backup {src} to {dst}")
     result: RsyncResult = {'error': None, 'stdout': None, 'stderr': None, 'returncode': None, 
                            'files': None, 'created': None, 'deleted': None, 'transferred': None, 
-                           'size': None, 'transferred_size': None, 'literal': None, 'matched': None, 
-                           'file_list_size': None, 'file_list_generation_time': None, 'file_list_transfer_time': None, 
-                           'bytes_sent': None, 'bytes_received': None, 'file_list': None, 'delete_list': None}
+                           'file_list': None, 'delete_list': None}
     if ':' not in src and not os.path.exists(src):
         result['error'] = f"Source directory {src} does not exist"
         return result
@@ -108,7 +97,8 @@ def rsync_backup(src: str, dst: str, excludes: list[str] | None = None,
         ("Total bytes sent", "bytes_sent"),
         ("Total bytes received", "bytes_received"),
     ]
-    mandatory_fields = ["files", "created", "transferred", "size", "transferred_size"]  # "deleted", 
+    mandatory_fields = ["files", "created", "transferred"]
+    optional_fields = ["deleted"] 
     file_list:list[str] = []
     delete_list:list[str] = []
     for line in proc_result.stdout.split("\n")[1:]:
@@ -136,7 +126,8 @@ def rsync_backup(src: str, dst: str, excludes: list[str] | None = None,
                 except ValueError:
                     result['error'] = f"Invalid value for field {field}: {val}"
                     return result
-                result[field[1]] = val
+                if field[1] in mandatory_fields or field[1] in optional_fields:
+                    result[field[1]] = val
                 break
     for field in mandatory_fields:
         if field not in result:
