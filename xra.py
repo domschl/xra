@@ -61,14 +61,14 @@ def _replace_mount_point(pathspec:str) -> str:
             pathspec = pathspec.replace('{{mount-point}}', '/Volumes')
         elif sys.platform == 'linux':
             username = getpass.getuser()
-            mnt = f'/run/user/{username}'
+            mnt = f'/run/media/{username}'
             pathspec = pathspec.replace('{{mount-point}}', mnt)
         else:
             raise Exception(f"Unsupported platform: {sys.platform}")
     return pathspec
 
 def rsync_backup(src: str, dst: str, excludes: list[str] | None = None, extensions: list[str] | None = None,
-                 options: list[str] | None = None, dry_run:bool = True, delete:bool = False) -> RsyncResult:
+                 options: list[str] | None = None, dry_run:bool = True, delete:bool = False, verbose:bool=False) -> RsyncResult:
     src = _replace_mount_point(os.path.expanduser(src))
     dst = _replace_mount_point(os.path.expanduser(dst))
     print(f"Backup {src} to {dst}")
@@ -119,10 +119,12 @@ def rsync_backup(src: str, dst: str, excludes: list[str] | None = None, extensio
             rsync_cmd.append("--include=*/")
             for ext in extensions:
                 rsync_cmd.append(f"--include=*.{ext}")
-            rsync_cmd.append("--exclude=*")
+            rsync_cmd += ["--exclude", "*"]
         if excludes is not None:
             for exclude in excludes:
-                rsync_cmd.append(f"--exclude={exclude}")
+                rsync_cmd += ["--exclude", exclude]
+    if verbose:
+        print(" ".join(rsync_cmd))
     try:
         proc_result = subprocess.run(rsync_cmd, check=True, capture_output=True, text=True)
         result['stdout'] = proc_result.stdout
@@ -254,6 +256,7 @@ def main():
     _ = parser.add_argument("--list-tasks", "-l", action="store_true", help="List available tasks")
     args = parser.parse_args()
 
+    verbose = cast(bool, args.verbose)
     config_filename = cast(str, args.config)
     if '/' not in config_filename:
         config_filename = os.path.expanduser("~/.config/xra/" + config_filename)
@@ -307,44 +310,50 @@ def main():
         dst = _replace_mount_point(os.path.expanduser(task['dst']))
         if ':' not in dst:
             if not os.path.exists(dst):
-                # print(f"Destination directory {dst} does not exist")
+                if verbose:
+                    print(f"Destination directory {dst} does not exist")
                 summary['skipped_tasks'] += 1
                 continue
         else:
             dst_host = dst.split(':')[0]
             if dst_host == hostname:
-                # print(f"Destination directory {dst} is on the same host")
+                if verbose:
+                    print(f"Destination directory {dst} is on the same host")
                 summary['skipped_tasks'] += 1
                 continue
                 
         src = _replace_mount_point(os.path.expanduser(task['src']))
         if ':' not in src:
             if not os.path.exists(src):
-                # print(f"Source directory {src} does not exist")
+                if verbose:
+                    print(f"Source directory {src} does not exist")
                 summary['skipped_tasks'] += 1
                 continue
         else:
             src_host = src.split(':')[0]
             if src_host == hostname:
-                # print(f"Source directory {src} is on the same host")
+                if verbose:
+                    print(f"Source directory {src} is on the same host")
                 summary['skipped_tasks'] += 1
                 continue
 
         if 'conditions' in task:
-            if eval_conditions(task, cast(bool, args.verbose)) is False:
-                # print(f"Conditions for task {task_name} are not met: {task['conditions']}")
+            if eval_conditions(task, verbose) is False:
+                if verbose:
+                    print(f"Conditions for task {task_name} are not met: {task['conditions']}")
                 summary['skipped_tasks'] += 1
                 continue
 
         if args.no_confirm is False:     
-            print(f"{src} ➔ {dst}")   
-            result = rsync_backup(task['src'], task['dst'], excludes=task['excludes'], options=task['options'], dry_run = True, delete = task['delete'])
+            if verbose:
+                print(f"{src} ➔ {dst}")   
+            result = rsync_backup(task['src'], task['dst'], excludes=task['excludes'], extensions=task['extensions'], options=task['options'], dry_run = True, delete = task['delete'], verbose=verbose)
             if result['error']:
                 print(result['error'])
                 sys.exit(1)
             print(f"---- Task {task_name} (dry run) ----")
             print(task['description'])
-            if cast(bool, args.verbose):
+            if verbose:
                 if result['file_list']:
                     print("Files to be transferred:")
                     for file in result['file_list']:
