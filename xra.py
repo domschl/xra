@@ -5,6 +5,7 @@ import argparse
 import socket
 import json
 import shutil
+import getpass
 from typing import TypedDict, cast
 
 class RsyncResult(TypedDict):
@@ -25,6 +26,7 @@ class XraTask(TypedDict):
     dst: str
     delete: bool
     excludes: list[str]
+    extensions: list[str]
     options: list[str]
     groups: list[str]
     conditions: list[str]
@@ -53,10 +55,22 @@ def is_git_uptodate(path: str, check_remote:bool = False) -> bool:
     else:
         return local_changes
 
-def rsync_backup(src: str, dst: str, excludes: list[str] | None = None, 
+def _replace_mount_point(pathspec:str) -> str:
+    if f'{{mount-point}}' in pathspec:
+        if sys.platform == 'darwin':
+            pathspec = pathspec.replace('{{mount-point}}', '/Volumes')
+        elif sys.platform == 'linux':
+            username = getpass.getuser()
+            mnt = f'/run/user/{username}'
+            pathspec = pathspec.replace('{{mount-point}}', mnt)
+        else:
+            raise Exception(f"Unsupported platform: {sys.platform}")
+    return pathspec
+
+def rsync_backup(src: str, dst: str, excludes: list[str] | None = None, extensions: list[str] | None = None,
                  options: list[str] | None = None, dry_run:bool = True, delete:bool = False) -> RsyncResult:
-    src = os.path.expanduser(src)
-    dst = os.path.expanduser(dst)
+    src = _replace_mount_point(os.path.expanduser(src))
+    dst = _replace_mount_point(os.path.expanduser(dst))
     print(f"Backup {src} to {dst}")
     result: RsyncResult = {'error': None, 'stdout': None, 'stderr': None, 'returncode': None, 
                            'files': None, 'created': None, 'deleted': None, 'transferred': None, 
@@ -81,7 +95,7 @@ def rsync_backup(src: str, dst: str, excludes: list[str] | None = None,
             rsync_cmd.append("--stats")
             
     # Automatically handle Unicode normalization for macOS/Linux sync
-    if sys.platform == "darwin" and (':' in src or ':' in dst):
+    if sys.platform == "darwin" and (':' in src or ':' in dst): # or src.startswith('/Volumes/') or dst.startswith("/Volumes/")):
         if not any(opt.startswith('--iconv') for opt in rsync_cmd):
             rsync_cmd.append("--iconv=utf-8-mac,utf-8")
     if dry_run:
@@ -94,10 +108,21 @@ def rsync_backup(src: str, dst: str, excludes: list[str] | None = None,
     rsync_cmd.append(dst)
     if delete:
         rsync_cmd.append("--delete")
-    if excludes is not None:
-        for exclude in excludes:
-            rsync_cmd.append("--exclude")
-            rsync_cmd.append(exclude)
+    if excludes is not None or extensions is not None:
+        if options is None:
+            options = []
+        for option in options:
+            if option.startswith("--include") or option.startswith("--exclude"):
+                result['error'] = "Options already contains --include or --exclude, incompatible with 'exclude' or 'extension' settings"
+                return result
+        if extensions is not None:
+            rsync_cmd.append("--include=*/")
+            for ext in extensions:
+                rsync_cmd.append(f"--include=*.{ext}")
+            rsync_cmd.append("--exclude=*")
+        if excludes is not None:
+            for exclude in excludes:
+                rsync_cmd.append(f"--exclude={exclude}")
     try:
         proc_result = subprocess.run(rsync_cmd, check=True, capture_output=True, text=True)
         result['stdout'] = proc_result.stdout
@@ -111,15 +136,15 @@ def rsync_backup(src: str, dst: str, excludes: list[str] | None = None,
         ("Number of created files", "created"),
         ("Number of deleted files", "deleted"),
         ("Number of regular files transferred", "transferred"),
-        ("Total file size", "size"),
-        ("Total transferred file size", "transferred_size"),
-        ("Literal data", "literal"),
-        ("Matched data", "matched"),
-        ("File list size", "file_list_size"),
-        ("File list generation time", "file_list_generation_time"),
-        ("File list transfer time", "file_list_transfer_time"),
-        ("Total bytes sent", "bytes_sent"),
-        ("Total bytes received", "bytes_received"),
+        # ("Total file size", "size"),
+        # ("Total transferred file size", "transferred_size"),
+        # ("Literal data", "literal"),
+        # ("Matched data", "matched"),
+        # ("File list size", "file_list_size"),
+        # ("File list generation time", "file_list_generation_time"),
+        # ("File list transfer time", "file_list_transfer_time"),
+        # ("Total bytes sent", "bytes_sent"),
+        # ("Total bytes received", "bytes_received"),
     ]
     mandatory_fields = ["files", "created", "transferred"]
     optional_fields = ["deleted"] 
@@ -168,6 +193,7 @@ def get_config(filename: str) -> dict[str, XraTask]:
                 "dst": "",
                 "delete": False,
                 "excludes": [],
+                "extensions": [],
                 "options": [],
                 "groups": [],
                 "conditions": []
@@ -178,6 +204,7 @@ def get_config(filename: str) -> dict[str, XraTask]:
                 "dst": "",
                 "delete": False,
                 "excludes": [],
+                "extensions": [],
                 "options": [],
                 "groups": [],
                 "conditions": []
@@ -198,18 +225,21 @@ def get_config(filename: str) -> dict[str, XraTask]:
             sys.exit(1)
     return tasks
 
-def eval_conditions(task: XraTask) -> bool:
+def eval_conditions(task: XraTask, verbose: bool=False) -> bool:
     for condition in task['conditions']:
         condition = condition.replace("{{local-hostname}}", socket.gethostname()).replace("{{local-platform}}", sys.platform)
         if "{{destination-capacity}}" in condition:
-            dst = os.path.expanduser(task['dst'])
+            dst = _replace_mount_point(os.path.expanduser(task['dst']))
             if ':' in dst:
                 return False
             capacity = get_local_disk_info(dst)
             if capacity is None:
+                if verbose:
+                    print(f"Failed to get destination capacity for {dst}")
                 return False
             condition = condition.replace("{{destination-capacity}}", str(capacity))
-            print(f"Capacity condition: {condition}")
+            if verbose:
+                print(f"Capacity condition: {condition}")
         if eval(condition) is False:
             return False
     return True
@@ -274,34 +304,40 @@ def main():
             print(f"Task {task_name} is not properly configured in configurations")
             sys.exit(1)
 
-        dst = os.path.expanduser(task['dst'])
+        dst = _replace_mount_point(os.path.expanduser(task['dst']))
         if ':' not in dst:
             if not os.path.exists(dst):
+                # print(f"Destination directory {dst} does not exist")
                 summary['skipped_tasks'] += 1
                 continue
         else:
             dst_host = dst.split(':')[0]
             if dst_host == hostname:
+                # print(f"Destination directory {dst} is on the same host")
                 summary['skipped_tasks'] += 1
                 continue
                 
-        src = os.path.expanduser(task['src'])
+        src = _replace_mount_point(os.path.expanduser(task['src']))
         if ':' not in src:
             if not os.path.exists(src):
+                # print(f"Source directory {src} does not exist")
                 summary['skipped_tasks'] += 1
                 continue
         else:
             src_host = src.split(':')[0]
             if src_host == hostname:
+                # print(f"Source directory {src} is on the same host")
                 summary['skipped_tasks'] += 1
                 continue
 
         if 'conditions' in task:
-            if eval_conditions(task) is False:
+            if eval_conditions(task, cast(bool, args.verbose)) is False:
+                # print(f"Conditions for task {task_name} are not met: {task['conditions']}")
                 summary['skipped_tasks'] += 1
                 continue
 
-        if args.no_confirm is False:        
+        if args.no_confirm is False:     
+            print(f"{src} ➔ {dst}")   
             result = rsync_backup(task['src'], task['dst'], excludes=task['excludes'], options=task['options'], dry_run = True, delete = task['delete'])
             if result['error']:
                 print(result['error'])
