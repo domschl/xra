@@ -39,6 +39,19 @@ def get_local_disk_info(path: str):
     except Exception:
         return None
 
+def is_git_repo(path: str) -> bool:
+    path = os.path.expanduser(path)
+    return os.path.exists(os.path.join(path, ".git"))
+
+def is_git_uptodate(path: str, check_remote:bool = False) -> bool:
+    path = os.path.expanduser(path)
+    local_changes = subprocess.run(["git", "status", "--porcelain"], cwd=path, capture_output=True, text=True).stdout == ""
+    if check_remote:
+        _ = subprocess.run(["git", "fetch"], cwd=path, capture_output=True)
+        remote_changes = subprocess.run(["git", "status", "--porcelain", "--branch"], cwd=path, capture_output=True, text=True).stdout == ""
+        return local_changes and remote_changes
+    else:
+        return local_changes
 
 def rsync_backup(src: str, dst: str, excludes: list[str] | None = None, 
                  options: list[str] | None = None, dry_run:bool = True, delete:bool = False) -> RsyncResult:
@@ -48,18 +61,29 @@ def rsync_backup(src: str, dst: str, excludes: list[str] | None = None,
     result: RsyncResult = {'error': None, 'stdout': None, 'stderr': None, 'returncode': None, 
                            'files': None, 'created': None, 'deleted': None, 'transferred': None, 
                            'file_list': None, 'delete_list': None}
-    if ':' not in src and not os.path.exists(src):
-        result['error'] = f"Source directory {src} does not exist"
-        return result
-    if ':' not in dst and not os.path.exists(dst):
-        result['error'] = f"Destination directory {dst} does not exist"
-        return result
+    if ':' not in src:
+        if not os.path.exists(src):
+            result['error'] = f"Source directory {src} does not exist"
+            return result
+        if is_git_repo(src):
+            if is_git_uptodate(src, check_remote=True):
+                result['error'] = f"Source directory {src} is not up to date with remote or contains uncommitted changes, please push/pull changes before sync"
+                return result
+    if ':' not in dst:
+        if not os.path.exists(dst):
+            result['error'] = f"Destination directory {dst} does not exist"
+            return result
     if options is None or options == []:
         rsync_cmd = ["rsync", "-avz", "--stats"]
     else:
         rsync_cmd = ["rsync"] + options
         if "--stats" not in rsync_cmd:
             rsync_cmd.append("--stats")
+            
+    # Automatically handle Unicode normalization for macOS/Linux sync
+    if sys.platform == "darwin" and (':' in src or ':' in dst):
+        if not any(opt.startswith('--iconv') for opt in rsync_cmd):
+            rsync_cmd.append("--iconv=utf-8-mac,utf-8")
     if dry_run:
         rsync_cmd.append("--dry-run")
     if src[-1] != "/":
