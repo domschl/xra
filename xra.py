@@ -101,26 +101,28 @@ def rsync_backup(src: str, dst: str, excludes: list[str] | None = None, extensio
     if dry_run:
         rsync_cmd.append("--dry-run")
     if src[-1] != "/":
+        print(f"Modifying source: {src}")
         src += "/"
     if dst[-1] != "/":
+        print(f"Modifying destination: {dst}")
         dst += "/"
     rsync_cmd.append(src)
     rsync_cmd.append(dst)
     if delete:
         rsync_cmd.append("--delete")
-    if excludes is not None or extensions is not None:
+    if (excludes is not None and excludes != []) or (extensions is not None and extensions != []):
         if options is None:
             options = []
         for option in options:
             if option.startswith("--include") or option.startswith("--exclude"):
                 result['error'] = "Options already contains --include or --exclude, incompatible with 'exclude' or 'extension' settings"
                 return result
-        if extensions is not None:
+        if extensions is not None and extensions != []:
             rsync_cmd.append("--include=*/")
             for ext in extensions:
                 rsync_cmd.append(f"--include=*.{ext}")
             rsync_cmd += ["--exclude", "*"]
-        if excludes is not None:
+        if excludes is not None and excludes != []:
             for exclude in excludes:
                 rsync_cmd += ["--exclude", exclude]
     if verbose:
@@ -367,6 +369,7 @@ def main():
                     for file in result['file_list']:
                         print(f"  {file}")
                 if result['delete_list']:
+                    print("---------------------------")
                     print("Files to be deleted:")
                     for file in result['delete_list']:
                         print(f"  {file}")
