@@ -101,8 +101,10 @@ def rsync_backup(src: str, dst: str, excludes: list[str] | None = None, extensio
     if dry_run:
         rsync_cmd.append("--dry-run")
     if src[-1] != "/":
+        print(f"Modifying source: {src}")
         src += "/"
     if dst[-1] != "/":
+        print(f"Modifying destination: {dst}")
         dst += "/"
     rsync_cmd.append(src)
     rsync_cmd.append(dst)
@@ -359,6 +361,7 @@ def main():
                     for file in result['file_list']:
                         print(f"  {file}")
                 if result['delete_list']:
+                    print("---------------------------")
                     print("Files to be deleted:")
                     for file in result['delete_list']:
                         print(f"  {file}")
