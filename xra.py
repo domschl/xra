@@ -185,7 +185,7 @@ def rsync_backup(src: str, dst: str, excludes: list[str] | None = None, extensio
             result['error'] = f"Mandatory field {field} not found in rsync result: {list(result.keys())}"
     return result
 
-def get_config(filename: str) -> dict[str, XraTask]:
+def create_default_config(filename: str) -> dict[str, XraTask]:
     if not os.path.exists(filename):
         print(f"Config file {filename} not found")
         default_config: dict[str, XraTask] = {
@@ -219,6 +219,9 @@ def get_config(filename: str) -> dict[str, XraTask]:
             json.dump(default_config, f, indent=4)
         print(f"Created default config file {filename}, please edit it and try again")
         sys.exit(1)
+    
+
+def get_config(filename: str) -> dict[str, XraTask]:
     with open(filename, "r") as f:
         try:
             tasks:dict[str, XraTask] = cast(dict[str, XraTask], json.load(f))
@@ -263,13 +266,18 @@ def main():
     if config_filename.endswith('.json') is False:
         config_filename += '.json'
         
-    config = get_config(config_filename)
+    if os.path.exists(config_filename):
+        config = get_config(config_filename)
+    else:
+        config = {}
     hostname = socket.gethostname()
-    if (config_filename == default_config):
-        filename = os.path.expanduser("~/.config/xra/" + hostname + ".json")
-        if os.path.exists(filename):
-            config.update(get_config(filename))
+    filename = os.path.expanduser("~/.config/xra/" + hostname + ".json")
+    if os.path.exists(filename):
+        config.update(get_config(filename))
 
+    if config == {}:
+        create_default_config(filename)
+        
     task_name = cast(str, args.task_name)
     if task_name not in config and task_name != 'all':
         print(f"Task {task_name} not found in config {config_filename}, available tasks: {list(config.keys())} (or 'all')")
