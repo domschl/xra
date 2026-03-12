@@ -108,19 +108,19 @@ def rsync_backup(src: str, dst: str, excludes: list[str] | None = None, extensio
     rsync_cmd.append(dst)
     if delete:
         rsync_cmd.append("--delete")
-    if excludes is not None or extensions is not None:
+    if (excludes is not None and excludes != []) or (extensions is not None and extensions != []):
         if options is None:
             options = []
         for option in options:
             if option.startswith("--include") or option.startswith("--exclude"):
                 result['error'] = "Options already contains --include or --exclude, incompatible with 'exclude' or 'extension' settings"
                 return result
-        if extensions is not None:
+        if extensions is not None and extensions != []:
             rsync_cmd.append("--include=*/")
             for ext in extensions:
                 rsync_cmd.append(f"--include=*.{ext}")
             rsync_cmd += ["--exclude", "*"]
-        if excludes is not None:
+        if excludes is not None and excludes != []:
             for exclude in excludes:
                 rsync_cmd += ["--exclude", exclude]
     if verbose:
