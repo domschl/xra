@@ -407,7 +407,7 @@ def main():
                 summary['skipped_tasks'] += 1
                 continue
 
-        result = rsync_backup(task['src'], task['dst'], excludes=task['excludes'], options=task['options'], dry_run = False, delete = task['delete'])
+        result = rsync_backup(task['src'], task['dst'], excludes=task['excludes'], extensions=task['extensions'], options=task['options'], dry_run = False, delete = task['delete'])
         print(f"---- Task {task_name} ----")
         if result['error']:
             print(f"Error: {result['error']}")
