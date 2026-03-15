@@ -269,13 +269,16 @@ def main():
         config_filename += '.json'
         
     if os.path.exists(config_filename):
+        print(f"Reading: {config_filename}")
         config = get_config(config_filename)
     else:
         config = {}
     hostname = socket.gethostname()
     filename = os.path.expanduser("~/.config/xra/" + hostname + ".json")
     if os.path.exists(filename):
-        config.update(get_config(filename))
+        def_config = get_config(filename)
+        if def_config and def_config != {}:
+            config.update(def_config)
 
     if config == {}:
         create_default_config(filename)
@@ -314,8 +317,9 @@ def main():
     for task_name in task_names:
         task = config[task_name]
         if 'src' not in task or 'dst' not in task or 'delete' not in task or 'excludes' not in task or not task['src'] or not task['dst']:
-            print(f"Task {task_name} is not properly configured in configurations")
-            sys.exit(1)
+            print(f"Task {task_name} is not properly configured in configurations, ignored.")
+            summary['error_tasks'] += 1
+            continue
 
         dst = _replace_mount_point(os.path.expanduser(task['dst']))
         if ':' not in dst:
