@@ -31,6 +31,18 @@ class XraTask(TypedDict):
     groups: list[str]
     conditions: list[str]
 
+class SummaryResult(TypedDict):
+    ok_tasks: int
+    ok_task_names: list[str]
+    skipped_tasks: int
+    skipped_task_names: list[str]
+    error_tasks: int
+    error_task_names: list[str]
+    files: int
+    created: int
+    deleted: int
+    transferred: int
+    
 def get_local_disk_info(path: str):
     if ':' in path:
         return None
@@ -305,10 +317,13 @@ def main():
             print(f"  {task['src']} ➔  {task['dst']}")
         sys.exit(0)
 
-    summary = {
+    summary: SummaryResult = {
         'ok_tasks': 0,
+        'ok_task_names': [],
         'skipped_tasks': 0,
+        'skipped_task_names': [],
         'error_tasks': 0,
+        'error_task_names': [],
         'files': 0,
         'created': 0,
         'deleted': 0,
@@ -319,6 +334,7 @@ def main():
         if 'src' not in task or 'dst' not in task or 'delete' not in task or 'excludes' not in task or not task['src'] or not task['dst']:
             print(f"Task {task_name} is not properly configured in configurations, ignored.")
             summary['error_tasks'] += 1
+            summary['error_task_names'].append(task_name)
             continue
 
         dst = _replace_mount_point(os.path.expanduser(task['dst']))
@@ -327,6 +343,7 @@ def main():
                 if verbose:
                     print(f"Destination directory {dst} does not exist")
                 summary['skipped_tasks'] += 1
+                summary['skipped_task_names'].append(task_name)
                 continue
         else:
             dst_host = dst.split(':')[0]
@@ -334,6 +351,7 @@ def main():
                 if verbose:
                     print(f"Destination directory {dst} is on the same host")
                 summary['skipped_tasks'] += 1
+                summary['skipped_task_names'].append(task_name)
                 continue
                 
         src = _replace_mount_point(os.path.expanduser(task['src']))
@@ -342,6 +360,7 @@ def main():
                 if verbose:
                     print(f"Source directory {src} does not exist")
                 summary['skipped_tasks'] += 1
+                summary['skipped_task_names'].append(task_name)
                 continue
         else:
             src_host = src.split(':')[0]
@@ -349,6 +368,7 @@ def main():
                 if verbose:
                     print(f"Source directory {src} is on the same host")
                 summary['skipped_tasks'] += 1
+                summary['skipped_task_names'].append(task_name)
                 continue
 
         if 'conditions' in task:
@@ -356,6 +376,7 @@ def main():
                 if verbose:
                     print(f"Conditions for task {task_name} are not met: {task['conditions']}")
                 summary['skipped_tasks'] += 1
+                summary['skipped_task_names'].append(task_name)
                 continue
 
         if args.no_confirm is False:     
@@ -397,6 +418,7 @@ def main():
             if num_changes == 0:
                 print("No changes")
                 summary['ok_tasks'] += 1
+                summary['ok_task_names'].append(task_name)
                 continue
             if n_del > 0:
                 print(f"Continue? WARNING DELETING {n_del} FILES (y/n): ", end="")
@@ -405,6 +427,7 @@ def main():
             ans = input()
             if ans != "y":
                 summary['skipped_tasks'] += 1
+                summary['skipped_task_names'].append(task_name)
                 continue
 
         result = rsync_backup(task['src'], task['dst'], excludes=task['excludes'], extensions=task['extensions'], options=task['options'], dry_run = False, delete = task['delete'])
@@ -412,6 +435,7 @@ def main():
         if result['error']:
             print(f"Error: {result['error']}")
             summary['error_tasks'] += 1
+            summary['error_task_names'].append(task_name)
             continue
         if cast(bool, args.verbose):
             if result['file_list']:
@@ -443,9 +467,9 @@ def main():
 
     if len(task_names) > 1:
         print("==== Summary ====")
-        print(f"OK tasks:       {summary['ok_tasks']}")
-        print(f"Skipped tasks:  {summary['skipped_tasks']}")
-        print(f"Error tasks:    {summary['error_tasks']}")
+        print(f"OK tasks:       {summary['ok_tasks']}: {summary['ok_task_names']}")
+        print(f"Skipped tasks:  {summary['skipped_tasks']}: {summary['skipped_task_names']}")
+        print(f"Error tasks:    {summary['error_tasks']}: {summary['error_task_names']}")
         print(f"Files:          {summary['files']}")
         print(f"Created:        {summary['created']}")
         print(f"Transferred:    {summary['transferred']}")
