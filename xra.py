@@ -43,6 +43,10 @@ def main():
     else:
         config = {}
     hostname = socket.gethostname()
+    if sys.platform=="darwin" and ("-2" in hostname or "-3" in hostname):
+        print(f"Your local hostname became {hostname}, macOS has again changed it. Please fix this and run again!")
+        print("Since macOS has lost the ability to change hostnames 'on the fly', you might need to reboot")
+        exit(-1)
     filename = os.path.expanduser("~/.config/xra/" + hostname + ".json")
     if os.path.exists(filename):
         def_config = xst.get_config(filename)
