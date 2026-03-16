@@ -201,9 +201,15 @@ def rsync_backup(src: str, dst: str, excludes: list[str] | None = None, extensio
             result['error'] = f"Mandatory field {field} not found in rsync result: {list(result.keys())}"
     return result
 
+def _replace_shorthands(cmd:str) -> str:
+    cmd = os.path.expanduser(cmd)
+    cmd = _replace_mount_point(cmd)
+    return cmd
+
 def pre_post_cmds(cmds: list[str]|None, verbose:bool=False) -> bool:
     if cmds is None or cmds == []:
         return True
+    cmds = [_replace_shorthands(cmd) for cmd in cmds]
     str_cmd = " ".join(cmds)
     if verbose:
         print(str_cmd)
