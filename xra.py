@@ -498,6 +498,7 @@ def main():
         print(f"Transferred:  {result['transferred']}")
         print(f"Deleted:      {n_del}")
         summary['ok_tasks'] += 1
+        summary['ok_task_names'].append(task_name)
         if result['files']:
             summary['files'] += result['files']
         if result['created']:
