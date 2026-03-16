@@ -25,6 +25,8 @@ class XraTask(TypedDict):
     src: str
     dst: str
     delete: bool
+    mount_cmd: list[str]|None
+    umount_cmd: list[str]|None
     excludes: list[str]
     extensions: list[str]
     options: list[str]
@@ -199,7 +201,23 @@ def rsync_backup(src: str, dst: str, excludes: list[str] | None = None, extensio
             result['error'] = f"Mandatory field {field} not found in rsync result: {list(result.keys())}"
     return result
 
-def create_default_config(filename: str) -> dict[str, XraTask]:
+def pre_post_cmds(cmds: list[str]|None, verbose:bool=False) -> bool:
+    if cmds is None or cmds == []:
+        return True
+    str_cmd = " ".join(cmds)
+    if verbose:
+        print(str_cmd)
+    try:
+        proc_result = subprocess.run(cmds, check=True, capture_output=True, text=True)
+        if proc_result.returncode != 0:
+            print(f"{str_cmd} [{proc_result.returncode}]: {proc_result.stderr}")
+            return False
+    except subprocess.CalledProcessError as e:
+        print(f"{str_cmd}: Error: {e}\nStdout: {e.stdout}\nStderr: {e.stderr}")  # pyright: ignore[reportAny]
+        return False
+    return True
+
+def create_default_config(filename: str):
     if not os.path.exists(filename):
         print(f"Config file {filename} not found")
         default_config: dict[str, XraTask] = {
@@ -208,6 +226,8 @@ def create_default_config(filename: str) -> dict[str, XraTask]:
                 "src": "",
                 "dst": "",
                 "delete": False,
+                "mount_cmd": [],
+                "umount_cmd": [],
                 "excludes": [],
                 "extensions": [],
                 "options": [],
@@ -219,6 +239,8 @@ def create_default_config(filename: str) -> dict[str, XraTask]:
                 "src": "",
                 "dst": "",
                 "delete": False,
+                "mount_cmd": [],
+                "umount_cmd": [],
                 "excludes": [],
                 "extensions": [],
                 "options": [],
@@ -233,7 +255,6 @@ def create_default_config(filename: str) -> dict[str, XraTask]:
             json.dump(default_config, f, indent=4)
         print(f"Created default config file {filename}, please edit it and try again")
         sys.exit(1)
-    
 
 def get_config(filename: str) -> dict[str, XraTask]:
     with open(filename, "r") as f:
@@ -293,7 +314,7 @@ def main():
             config.update(def_config)
 
     if config == {}:
-        create_default_config(filename)
+        _ = create_default_config(filename)
         
     task_name = cast(str, args.task_name)
     if task_name not in config and task_name != 'all':
@@ -337,6 +358,12 @@ def main():
             summary['error_task_names'].append(task_name)
             continue
 
+        if pre_post_cmds(task['mount_cmd'], verbose) is False:
+            print(f"Task {task_name}, mount failure")
+            summary['error_tasks'] += 1
+            summary['error_task_names'].append(task_name)
+            continue
+        
         dst = _replace_mount_point(os.path.expanduser(task['dst']))
         if ':' not in dst:
             if not os.path.exists(dst):
@@ -344,6 +371,7 @@ def main():
                     print(f"Destination directory {dst} does not exist")
                 summary['skipped_tasks'] += 1
                 summary['skipped_task_names'].append(task_name)
+                _ = pre_post_cmds(task['umount_cmd'], verbose)
                 continue
         else:
             dst_host = dst.split(':')[0]
@@ -361,6 +389,7 @@ def main():
                     print(f"Source directory {src} does not exist")
                 summary['skipped_tasks'] += 1
                 summary['skipped_task_names'].append(task_name)
+                _ = pre_post_cmds(task['umount_cmd'], verbose)
                 continue
         else:
             src_host = src.split(':')[0]
@@ -369,6 +398,7 @@ def main():
                     print(f"Source directory {src} is on the same host")
                 summary['skipped_tasks'] += 1
                 summary['skipped_task_names'].append(task_name)
+                _ = pre_post_cmds(task['umount_cmd'], verbose)
                 continue
 
         if 'conditions' in task:
@@ -377,6 +407,7 @@ def main():
                     print(f"Conditions for task {task_name} are not met: {task['conditions']}")
                 summary['skipped_tasks'] += 1
                 summary['skipped_task_names'].append(task_name)
+                _ = pre_post_cmds(task['umount_cmd'], verbose)
                 continue
 
         if args.no_confirm is False:     
@@ -385,6 +416,7 @@ def main():
             result = rsync_backup(task['src'], task['dst'], excludes=task['excludes'], extensions=task['extensions'], options=task['options'], dry_run = True, delete = task['delete'], verbose=verbose)
             if result['error']:
                 print(result['error'])
+                _ = pre_post_cmds(task['umount_cmd'], verbose)
                 sys.exit(1)
             print(f"---- Task {task_name} (dry run) ----")
             print(task['description'])
@@ -419,6 +451,7 @@ def main():
                 print("No changes")
                 summary['ok_tasks'] += 1
                 summary['ok_task_names'].append(task_name)
+                _ = pre_post_cmds(task['umount_cmd'], verbose)
                 continue
             if n_del > 0:
                 print(f"Continue? WARNING DELETING {n_del} FILES (y/n): ", end="")
@@ -428,6 +461,7 @@ def main():
             if ans != "y":
                 summary['skipped_tasks'] += 1
                 summary['skipped_task_names'].append(task_name)
+                _ = pre_post_cmds(task['umount_cmd'], verbose)
                 continue
 
         result = rsync_backup(task['src'], task['dst'], excludes=task['excludes'], extensions=task['extensions'], options=task['options'], dry_run = False, delete = task['delete'])
@@ -436,6 +470,7 @@ def main():
             print(f"Error: {result['error']}")
             summary['error_tasks'] += 1
             summary['error_task_names'].append(task_name)
+            _ = pre_post_cmds(task['umount_cmd'], verbose)
             continue
         if cast(bool, args.verbose):
             if result['file_list']:
@@ -464,6 +499,7 @@ def main():
         if result['transferred']:
             summary['transferred'] += result['transferred']
         summary['deleted'] += n_del
+        _ = pre_post_cmds(task['umount_cmd'], verbose)
 
     if len(task_names) > 1:
         print("==== Summary ====")
