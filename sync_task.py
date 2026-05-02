@@ -130,13 +130,13 @@ class TasksSyncer:
                     result['error'] = "Options already contains --include or --exclude, incompatible with 'exclude' or 'extension' settings"
                     return result
             if extensions is not None and extensions != []:
-                rsync_cmd.append("--include=*/")
+                rsync_cmd.append("--include=\"*/\"")
                 for ext in extensions:
-                    rsync_cmd.append(f"--include=*.{ext}")
-                rsync_cmd += ["--exclude", "*"]
+                    rsync_cmd.append(f"--include=\"*.{ext}\"")
+                rsync_cmd += ["--exclude=\"*\""]
             if excludes is not None and excludes != []:
                 for exclude in excludes:
-                    rsync_cmd += ["--exclude", exclude]
+                    rsync_cmd += ["--exclude=\"{exclude}\""]
         if verbose:
             print(" ".join(rsync_cmd))
         try:
