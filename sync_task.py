@@ -127,7 +127,7 @@ class TasksSyncer:
             else:
                 if excludes is not None and excludes != []:
                     for exclude in excludes:
-                        rsync_cmd += [f"--exclude=\"{exclude}\""]
+                        rsync_cmd += [f"--exclude={exclude}"]
         if dry_run:
             rsync_cmd.append("--dry-run")
         if src[-1] != "/":
