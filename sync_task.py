@@ -100,7 +100,10 @@ class TasksSyncer:
                 result['error'] = f"Destination directory {dst} does not exist"
                 return result
         if options is None or options == []:
-            rsync_cmd = ["rsync", "-avz", "--stats"]
+            if extensions is not None and extensions != []:
+                rsync_cmd = ["rsync", "-avzm", "--stats"]
+            else:
+                rsync_cmd = ["rsync", "-avz", "--stats"]
         else:
             rsync_cmd = ["rsync"] + options
             if "--stats" not in rsync_cmd:
@@ -110,6 +113,21 @@ class TasksSyncer:
         if sys.platform == "darwin" and (':' in src or ':' in dst): # or src.startswith('/Volumes/') or dst.startswith("/Volumes/")):
             if not any(opt.startswith('--iconv') for opt in rsync_cmd):
                 rsync_cmd.append("--iconv=utf-8-mac,utf-8")
+        if (excludes is not None and excludes != []) or (extensions is not None and extensions != []):
+            if options is None:
+                options = []
+            for option in options:
+                if option.startswith("--include") or option.startswith("--exclude"):
+                    result['error'] = "Options already contains --include or --exclude, incompatible with 'exclude' or 'extension' settings"
+                    return result
+            if extensions is not None and extensions != []:
+                for ext in extensions:
+                    rsync_cmd.append(f"--include=*.{ext}")
+                rsync_cmd += ["-f", "hide,! */"]
+            else:
+                if excludes is not None and excludes != []:
+                    for exclude in excludes:
+                        rsync_cmd += [f"--exclude=\"{exclude}\""]
         if dry_run:
             rsync_cmd.append("--dry-run")
         if src[-1] != "/":
@@ -122,21 +140,6 @@ class TasksSyncer:
         rsync_cmd.append(dst)
         if delete:
             rsync_cmd.append("--delete")
-        if (excludes is not None and excludes != []) or (extensions is not None and extensions != []):
-            if options is None:
-                options = []
-            for option in options:
-                if option.startswith("--include") or option.startswith("--exclude"):
-                    result['error'] = "Options already contains --include or --exclude, incompatible with 'exclude' or 'extension' settings"
-                    return result
-            if extensions is not None and extensions != []:
-                rsync_cmd.append("--include=\"*/\"")
-                for ext in extensions:
-                    rsync_cmd.append(f"--include=\"*.{ext}\"")
-                rsync_cmd += ["--exclude=\"*\""]
-            if excludes is not None and excludes != []:
-                for exclude in excludes:
-                    rsync_cmd += ["--exclude=\"{exclude}\""]
         if verbose:
             print(" ".join(rsync_cmd))
         try:
