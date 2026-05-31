@@ -271,7 +271,7 @@ def main() -> None:
             TextColumn("[dim]{task.fields[current_file]}", justify="left")
         )
         
-        task_id = progress.add_task(f"Syncing {task_name}", total=None, current_file="")
+        task_id = progress.add_task(f"Syncing {task_name:<15}", total=None, current_file="")
         
         # Track overall progress state to prevent jumping bar length
         state: dict[str, Any] = {
@@ -289,8 +289,6 @@ def main() -> None:
         def progress_callback(event: dict[str, Any]) -> None:
             if event['type'] == 'progress':
                 curr_file = event['current_file'] or ""
-                if len(curr_file) > 40:
-                    curr_file = "..." + curr_file[-37:]
                 
                 # Update task-wide completion if rsync to_chk fields are populated
                 if event['to_chk_total'] is not None and event['to_chk_current'] is not None:
@@ -300,14 +298,28 @@ def main() -> None:
                         state['total'] = tot
                         state['completed'] = chk
                 
-                status_msg = f"[green]{curr_file}[/green]"
-                if event['percent'] is not None:
-                    status_msg += f" ({event['percent']}%)"
-                if event['speed']:
-                    status_msg += f" [yellow]{event['speed']}[/yellow]"
+                # Format fixed-width filename (exactly 30 chars)
+                display_name = curr_file
+                if len(display_name) > 30:
+                    display_name = display_name[:13] + "..." + display_name[-14:]
+                display_name = f"{display_name:<30}"
                 
+                # Format fixed-width percentage (exactly 6 chars)
+                pct = event['percent']
+                if pct is not None:
+                    pct_str = f"({pct}%)"
+                else:
+                    pct_str = ""
+                pct_str = f"{pct_str:>6}"
+                
+                # Format fixed-width completion (exactly 12 chars if total is known, e.g. " (120/120)  ")
                 if state['total'] is not None:
-                    status_msg += f" ({state['completed']}/{state['total']})"
+                    count_str = f"({state['completed']}/{state['total']})"
+                else:
+                    count_str = ""
+                count_str = f"{count_str:>12}"
+                
+                status_msg = f"[dim][green]{display_name}[/green] [cyan]{pct_str}[/cyan] [yellow]{count_str}[/yellow][/dim]"
                 
                 progress.update(
                     task_id,
@@ -323,12 +335,19 @@ def main() -> None:
                     if event.get('to_chk_total') is None and state['total'] is not None:
                         state['completed'] = min(state['completed'] + 1, state['total'])
                 
-                if len(curr_file) > 40:
-                    curr_file = "..." + curr_file[-37:]
+                display_name = curr_file
+                if len(display_name) > 30:
+                    display_name = display_name[:13] + "..." + display_name[-14:]
+                display_name = f"{display_name:<30}"
                 
-                status_msg = f"[green]{curr_file}[/green]"
                 if state['total'] is not None:
-                    status_msg += f" ({state['completed']}/{state['total']})"
+                    count_str = f"({state['completed']}/{state['total']})"
+                else:
+                    count_str = ""
+                count_str = f"{count_str:>12}"
+                
+                # Align to 30 + 1 space + 6 space + 1 space + 12 = 50 visible chars
+                status_msg = f"[dim][green]{display_name}[/green]        [yellow]{count_str}[/yellow][/dim]"
                 
                 progress.update(task_id, completed=state['completed'], total=state['total'], current_file=status_msg)
             elif event['type'] == 'delete':
@@ -338,12 +357,19 @@ def main() -> None:
                     if event.get('to_chk_total') is None and state['total'] is not None:
                         state['completed'] = min(state['completed'] + 1, state['total'])
                 
-                if len(curr_file) > 40:
-                    curr_file = "..." + curr_file[-37:]
+                display_name = curr_file
+                if len(display_name) > 25:
+                    display_name = display_name[:10] + "..." + display_name[-12:]
+                display_name = f"Del: {display_name}"
+                display_name = f"{display_name:<30}"
                 
-                status_msg = f"[red]Deleting {curr_file}[/red]"
                 if state['total'] is not None:
-                    status_msg += f" ({state['completed']}/{state['total']})"
+                    count_str = f"({state['completed']}/{state['total']})"
+                else:
+                    count_str = ""
+                count_str = f"{count_str:>12}"
+                
+                status_msg = f"[dim][red]{display_name}[/red]        [yellow]{count_str}[/yellow][/dim]"
                 
                 progress.update(task_id, completed=state['completed'], total=state['total'], current_file=status_msg)
 
