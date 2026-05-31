@@ -267,7 +267,6 @@ def main() -> None:
             BarColumn(bar_width=40),
             TaskProgressColumn(),
             TimeRemainingColumn(),
-            TransferSpeedColumn(),
             TextColumn("[dim]{task.fields[current_file]}", justify="left")
         )
         
