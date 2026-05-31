@@ -28,12 +28,6 @@ class SyncTaskSummary(TypedDict):
 
 console = Console()
 
-def print_banner() -> None:
-    banner = Text()
-    banner.append("⚡ XRA ", style="bold italic bright_cyan")
-    banner.append("— Ultimate Rsync Backup Utility\n", style="bold white")
-    banner.append("Configurable, real-time feedback, and secure.", style="dim italic cyan")
-    console.print(Panel(banner, border_style="cyan", expand=False))
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Backup files using rsync")
@@ -53,8 +47,6 @@ def main() -> None:
         config_filename += '.json'
 
     xst = TasksSyncer()
-    
-    print_banner()
     
     if os.path.exists(config_filename):
         console.print(f"[dim]Reading configuration: {config_filename}[/dim]")
@@ -227,7 +219,7 @@ def main() -> None:
             dry_table.add_row("To Create", f"{dry_run_result['created']}")
             dry_table.add_row("To Transfer", f"{dry_run_result['transferred']}")
             dry_table.add_row("To Delete", f"{n_del}", style="red" if n_del > 0 else "")
-            console.print(Panel(dry_table, border_style="green"))
+            console.print(dry_table)
             
             if verbose:
                 if dry_run_result['file_list']:
