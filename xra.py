@@ -266,7 +266,6 @@ def main() -> None:
             TextColumn("[bold blue]{task.description}"),
             BarColumn(bar_width=40),
             TaskProgressColumn(),
-            TimeRemainingColumn(),
             TextColumn("[dim]{task.fields[current_file]}", justify="left")
         )
         
