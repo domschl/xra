@@ -6,7 +6,7 @@ import socket
 import json
 import shutil
 import getpass
-from typing import TypedDict, cast
+from typing import TypedDict, cast, Callable, Any
 
 class SyncTaskResult(TypedDict):
     error: str | None
@@ -80,10 +80,12 @@ class TasksSyncer:
         return pathspec
 
     def rsync_backup(self, src: str, dst: str, excludes: list[str] | None = None, extensions: list[str] | None = None,
-                     options: list[str] | None = None, dry_run:bool = True, delete:bool = False, verbose:bool=False) -> SyncTaskResult:
+                     options: list[str] | None = None, dry_run: bool = True, delete: bool = False, verbose: bool = False,
+                     progress_callback: Callable[[dict[str, Any]], None] | None = None) -> SyncTaskResult:
         src = TasksSyncer.replace_mount_point(os.path.expanduser(src))
         dst = TasksSyncer.replace_mount_point(os.path.expanduser(dst))
-        print(f"Backup {src} to {dst}")
+        if verbose:
+            print(f"Backup {src} to {dst}")
         result: SyncTaskResult = {'error': None, 'stdout': None, 'stderr': None, 'returncode': None, 
                                'files': None, 'created': None, 'deleted': None, 'transferred': None, 
                                'file_list': None, 'delete_list': None}
@@ -130,11 +132,19 @@ class TasksSyncer:
                         rsync_cmd += [f"--exclude={exclude}"]
         if dry_run:
             rsync_cmd.append("--dry-run")
+        else:
+            # If doing real run and progress callback is set, ensure we request progress updates
+            if progress_callback is not None:
+                if "-P" not in rsync_cmd and "--progress" not in rsync_cmd and "--info=progress2" not in rsync_cmd:
+                    rsync_cmd.append("--progress")
+
         if src[-1] != "/":
-            print(f"Modifying source: {src}")
+            if verbose:
+                print(f"Modifying source: {src}")
             src += "/"
         if dst[-1] != "/":
-            print(f"Modifying destination: {dst}")
+            if verbose:
+                print(f"Modifying destination: {dst}")
             dst += "/"
         rsync_cmd.append(src)
         rsync_cmd.append(dst)
@@ -142,63 +152,167 @@ class TasksSyncer:
             rsync_cmd.append("--delete")
         if verbose:
             print(" ".join(rsync_cmd))
+
+        import re
+        import threading
+        PROGRESS_RE = re.compile(
+            r'^\s*([\d,]+)\s+(\d+)%\s+([\d.]+[\w/]+)\s+(\d+:\d+:\d+|\d+:\d+)(?:\s+\((?:xfr#\d+,\s+)?to-chk=(\d+)/(\d+)\))?'
+        )
+
+        stdout_lines: list[str] = []
+        stderr_lines: list[str] = []
+        file_list: list[str] = []
+        delete_list: list[str] = []
+
         try:
-            proc_result = subprocess.run(rsync_cmd, check=True, capture_output=True, text=True)
-            result['stdout'] = proc_result.stdout
-            result['stderr'] = proc_result.stderr
-            result['returncode'] = proc_result.returncode
-        except subprocess.CalledProcessError as e:
-            result['error'] = f"Error: {e}\nStdout: {e.stdout}\nStderr: {e.stderr}"  # pyright: ignore[reportAny]
+            proc = subprocess.Popen(
+                rsync_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1
+            )
+        except Exception as e:
+            result['error'] = f"Failed to start rsync process: {e}"
             return result
+
+        def read_stderr(stream: Any) -> None:
+            for err_line in stream:
+                stderr_lines.append(err_line)
+
+        err_thread = threading.Thread(target=read_stderr, args=(proc.stderr,))
+        err_thread.start()
+
+        try:
+            current_file = None
+            while True:
+                line = proc.stdout.readline()  # pyright: ignore[reportOptionalMemberAccess]
+                if not line:
+                    break
+                stdout_lines.append(line)
+                
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                
+                # Check for progress line
+                match = PROGRESS_RE.match(line)
+                if match:
+                    if progress_callback:
+                        bytes_val = int(match.group(1).replace(",", ""))
+                        percent_val = int(match.group(2))
+                        speed_val = match.group(3)
+                        eta_val = match.group(4)
+                        to_chk_curr = int(match.group(5)) if match.group(5) else None
+                        to_chk_tot = int(match.group(6)) if match.group(6) else None
+                        
+                        progress_callback({
+                            'type': 'progress',
+                            'bytes': bytes_val,
+                            'percent': percent_val,
+                            'speed': speed_val,
+                            'eta': eta_val,
+                            'to_chk_current': to_chk_curr,
+                            'to_chk_total': to_chk_tot,
+                            'current_file': current_file
+                        })
+                    continue
+                
+                # Ignore system messages and stats lines
+                if (stripped.startswith("building file list") or 
+                    stripped.startswith("sending incremental file list") or 
+                    stripped.startswith("created directory") or
+                    stripped.startswith("rsync:") or
+                    stripped.startswith("rsync error:")):
+                    continue
+                
+                if (stripped.startswith("sent ") and "received " in stripped) or (stripped.startswith("total size is ") and "speedup is " in stripped):
+                    continue
+
+                if ":" in stripped:
+                    prefix = stripped.split(":", 1)[0].strip()
+                    if prefix in [
+                        "Number of files",
+                        "Number of created files",
+                        "Number of deleted files",
+                        "Number of regular files transferred",
+                        "Total file size",
+                        "Total transferred file size",
+                        "Literal data",
+                        "Matched data",
+                        "File list size",
+                        "File list generation time",
+                        "File list transfer time",
+                        "Total bytes sent",
+                        "Total bytes received",
+                        "sent",
+                        "received",
+                        "speedup"
+                    ]:
+                        continue
+                
+                if stripped.startswith("deleting "):
+                    del_file = stripped[9:].strip()
+                    delete_list.append(del_file)
+                    if progress_callback:
+                        progress_callback({
+                            'type': 'delete',
+                            'filename': del_file
+                        })
+                else:
+                    # It's a filename being processed/transferred
+                    current_file = stripped
+                    file_list.append(current_file)
+                    if progress_callback:
+                        progress_callback({
+                            'type': 'file',
+                            'filename': current_file
+                        })
+        finally:
+            proc.stdout.close()  # pyright: ignore[reportOptionalMemberAccess]
+            proc.wait()
+            err_thread.join()
+
+        result['stdout'] = "".join(stdout_lines)
+        result['stderr'] = "".join(stderr_lines)
+        result['returncode'] = proc.returncode
+        result['file_list'] = file_list
+        result['delete_list'] = delete_list
+
+        if proc.returncode != 0:
+            result['error'] = f"Error: Command '{' '.join(rsync_cmd)}' returned non-zero exit status {proc.returncode}.\nStdout: {result['stdout']}\nStderr: {result['stderr']}"
+            return result
+
         fields = [
             ("Number of files", "files"),
             ("Number of created files", "created"),
             ("Number of deleted files", "deleted"),
             ("Number of regular files transferred", "transferred"),
-            # ("Total file size", "size"),
-            # ("Total transferred file size", "transferred_size"),
-            # ("Literal data", "literal"),
-            # ("Matched data", "matched"),
-            # ("File list size", "file_list_size"),
-            # ("File list generation time", "file_list_generation_time"),
-            # ("File list transfer time", "file_list_transfer_time"),
-            # ("Total bytes sent", "bytes_sent"),
-            # ("Total bytes received", "bytes_received"),
         ]
         mandatory_fields = ["files", "created", "transferred"]
         optional_fields = ["deleted"] 
-        file_list:list[str] = []
-        delete_list:list[str] = []
-        for line in proc_result.stdout.split("\n")[1:]:
-            if not line.strip() or ":" in line:
-                break
-            if line.startswith("deleting"):
-                delete_list.append(line.split("deleting")[1].strip())
-            else:
-                file_list.append(line)
-        result['file_list'] = file_list
-        result['delete_list'] = delete_list
 
-        for line in proc_result.stdout.split("\n"):
+        for line in stdout_lines:
             for field in fields:
                 toks = line.split(":")
                 if len(toks) < 2:
                     continue
                 if toks[0].strip() == field[0]:
-                    val = toks[1].strip().split(" ")[0].strip().replace(",","")
+                    val_str = toks[1].strip().split(" ")[0].strip().replace(",","")
                     try:
-                        if '.' in val:
-                            val = float(val)
+                        if '.' in val_str:
+                            val: int | float = float(val_str)
                         else:
-                            val = int(val)
+                            val = int(val_str)
                     except ValueError:
-                        result['error'] = f"Invalid value for field {field}: {val}"
+                        result['error'] = f"Invalid value for field {field}: {val_str}"
                         return result
                     if field[1] in mandatory_fields or field[1] in optional_fields:
-                        result[field[1]] = val
+                        result[field[1]] = val  # pyright: ignore[reportGeneralTypeIssues]
                     break
+
         for field in mandatory_fields:
-            if field not in result:
+            if field not in result or result[field] is None:  # pyright: ignore[reportGeneralTypeIssues]
                 result['error'] = f"Mandatory field {field} not found in rsync result: {list(result.keys())}"
         return result
 

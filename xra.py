@@ -2,7 +2,15 @@ import argparse
 import os
 import sys
 import socket
-from typing import cast, TypedDict
+from typing import cast, TypedDict, Any
+
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
+from rich.prompt import Confirm
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn, TransferSpeedColumn
+
 from sync_task import TasksSyncer
 
 class SyncTaskSummary(TypedDict):
@@ -18,7 +26,16 @@ class SyncTaskSummary(TypedDict):
     transferred: int
     
 
-def main():
+console = Console()
+
+def print_banner() -> None:
+    banner = Text()
+    banner.append("⚡ XRA ", style="bold italic bright_cyan")
+    banner.append("— Ultimate Rsync Backup Utility\n", style="bold white")
+    banner.append("Configurable, real-time feedback, and secure.", style="dim italic cyan")
+    console.print(Panel(banner, border_style="cyan", expand=False))
+
+def main() -> None:
     parser = argparse.ArgumentParser(description="Backup files using rsync")
     _ = parser.add_argument("task_name", nargs='?', type=str, default='all', help="Task name or group name or 'all'")
     default_config = os.path.expanduser("~/.config/xra/config.json")
@@ -37,16 +54,20 @@ def main():
 
     xst = TasksSyncer()
     
+    print_banner()
+    
     if os.path.exists(config_filename):
-        print(f"Reading: {config_filename}")
+        console.print(f"[dim]Reading configuration: {config_filename}[/dim]")
         config = xst.get_config(config_filename)
     else:
         config = {}
+        
     hostname = socket.gethostname()
     if sys.platform=="darwin" and ("-2" in hostname or "-3" in hostname):
-        print(f"Your local hostname became {hostname}, macOS has again changed it. Please fix this and run again!")
-        print("Since macOS has lost the ability to change hostnames 'on the fly', you might need to reboot")
+        console.print(f"[bold red]Your local hostname became {hostname}, macOS has again changed it. Please fix this and run again![/bold red]")
+        console.print("[red]Since macOS has lost the ability to change hostnames 'on the fly', you might need to reboot[/red]")
         exit(-1)
+        
     filename = os.path.expanduser("~/.config/xra/" + hostname + ".json")
     if os.path.exists(filename):
         def_config = xst.get_config(filename)
@@ -56,9 +77,19 @@ def main():
     if config == {}:
         _ = xst.create_default_config(filename)
         
+    # Collect all valid group names
+    all_groups: set[str] = set()
+    for t in config.values():
+        if 'groups' in t and isinstance(t['groups'], list):
+            for g in t['groups']:
+                all_groups.add(g)
+
     task_name = cast(str, args.task_name)
-    if task_name not in config and task_name != 'all':
-        print(f"Task {task_name} not found in config {config_filename}, available tasks: {list(config.keys())} (or 'all')")
+    if task_name not in config and task_name != 'all' and task_name not in all_groups:
+        console.print(f"[bold red]Error: Task or Group '{task_name}' not found in configuration.[/bold red]")
+        console.print(f"Available tasks: {list(config.keys())}")
+        if all_groups:
+            console.print(f"Available groups: {list(all_groups)}")
         sys.exit(1)
     
     task_names: list[str] = []
@@ -71,11 +102,18 @@ def main():
             task_names.append(config_task)
 
     if cast(bool, args.list_tasks):
-        print("Configured tasks:")
-        for task_name in task_names:
-            task = config[task_name]
-            print(f"{task_name}: {task['description']}")
-            print(f"  {task['src']} ➔  {task['dst']}")
+        table = Table(title="Configured Backup Tasks", title_style="bold cyan", border_style="dim cyan")
+        table.add_column("Task Name", style="bold green", no_wrap=True)
+        table.add_column("Description", style="white")
+        table.add_column("Source ➔ Destination", style="magenta")
+        for name in task_names:
+            task = config[name]
+            table.add_row(
+                name,
+                task.get('description', ''),
+                f"[yellow]{task['src']}[/yellow] ➔ [cyan]{task['dst']}[/cyan]"
+            )
+        console.print(table)
         sys.exit(0)
 
     summary: SyncTaskSummary = {
@@ -90,16 +128,24 @@ def main():
         'deleted': 0,
         'transferred': 0,
     }
+    
     for task_name in task_names:
         task = config[task_name]
+        
+        console.print(f"\n[bold cyan]▶ Processing Task: {task_name}[/bold cyan]")
+        if task.get('description'):
+            console.print(f"[dim]{task['description']}[/dim]")
+        
         if 'src' not in task or 'dst' not in task or 'delete' not in task or 'excludes' not in task or not task['src'] or not task['dst']:
-            print(f"Task {task_name} is not properly configured in configurations, ignored.")
+            console.print(f"[bold red]❌ Task {task_name} is not properly configured. Skipping.[/bold red]")
             summary['error_tasks'] += 1
             summary['error_task_names'].append(task_name)
             continue
 
-        if xst.pre_post_cmds(task['mount_cmd'], verbose) is False:
-            print(f"Task {task_name}, mount failure")
+        with console.status(f"[bold yellow]Mounting drive for {task_name}...[/bold yellow]", spinner="dots"):
+            mount_ok = xst.pre_post_cmds(task['mount_cmd'], verbose)
+        if mount_ok is False:
+            console.print(f"[bold red]❌ Task {task_name}: Mount failure[/bold red]")
             summary['error_tasks'] += 1
             summary['error_task_names'].append(task_name)
             continue
@@ -108,7 +154,8 @@ def main():
         if ':' not in dst:
             if not os.path.exists(dst):
                 if verbose:
-                    print(f"Destination directory {dst} does not exist")
+                    console.print(f"[dim]Destination directory {dst} does not exist[/dim]")
+                console.print(f"[bold yellow]⚠ Skipped: Destination directory {dst} does not exist[/bold yellow]")
                 summary['skipped_tasks'] += 1
                 summary['skipped_task_names'].append(task_name)
                 _ = xst.pre_post_cmds(task['umount_cmd'], verbose)
@@ -117,7 +164,8 @@ def main():
             dst_host = dst.split(':')[0]
             if dst_host == hostname:
                 if verbose:
-                    print(f"Destination directory {dst} is on the same host")
+                    console.print(f"[dim]Destination directory {dst} is on the same host[/dim]")
+                console.print(f"[bold yellow]⚠ Skipped: Destination {dst} is on the same host[/bold yellow]")
                 summary['skipped_tasks'] += 1
                 summary['skipped_task_names'].append(task_name)
                 continue
@@ -126,7 +174,8 @@ def main():
         if ':' not in src:
             if not os.path.exists(src):
                 if verbose:
-                    print(f"Source directory {src} does not exist")
+                    console.print(f"[dim]Source directory {src} does not exist[/dim]")
+                console.print(f"[bold yellow]⚠ Skipped: Source directory {src} does not exist[/bold yellow]")
                 summary['skipped_tasks'] += 1
                 summary['skipped_task_names'].append(task_name)
                 _ = xst.pre_post_cmds(task['umount_cmd'], verbose)
@@ -135,16 +184,20 @@ def main():
             src_host = src.split(':')[0]
             if src_host == hostname:
                 if verbose:
-                    print(f"Source directory {src} is on the same host")
+                    console.print(f"[dim]Source directory {src} is on the same host[/dim]")
+                console.print(f"[bold yellow]⚠ Skipped: Source {src} is on the same host[/bold yellow]")
                 summary['skipped_tasks'] += 1
                 summary['skipped_task_names'].append(task_name)
                 _ = xst.pre_post_cmds(task['umount_cmd'], verbose)
                 continue
 
         if 'conditions' in task:
-            if xst.eval_conditions(task, verbose) is False:
+            with console.status(f"[bold yellow]Evaluating conditions for {task_name}...[/bold yellow]", spinner="dots"):
+                cond_met = xst.eval_conditions(task, verbose)
+            if cond_met is False:
                 if verbose:
-                    print(f"Conditions for task {task_name} are not met: {task['conditions']}")
+                    console.print(f"[dim]Conditions for task {task_name} are not met: {task['conditions']}[/dim]")
+                console.print(f"[bold yellow]⚠ Skipped: Conditions not met ({task['conditions']})[/bold yellow]")
                 summary['skipped_tasks'] += 1
                 summary['skipped_task_names'].append(task_name)
                 _ = xst.pre_post_cmds(task['umount_cmd'], verbose)
@@ -152,85 +205,149 @@ def main():
 
         if args.no_confirm is False:     
             if verbose:
-                print(f"{src} ➔ {dst}")   
-            result = xst.rsync_backup(task['src'], task['dst'], excludes=task['excludes'], extensions=task['extensions'], options=task['options'], dry_run = True, delete = task['delete'], verbose=verbose)
+                console.print(f"[dim]Dry run: {src} ➔ {dst}[/dim]")
+            
+            with console.status(f"[bold yellow]Performing dry-run check...[/bold yellow]", spinner="dots"):
+                result = xst.rsync_backup(task['src'], task['dst'], excludes=task['excludes'], extensions=task['extensions'], options=task['options'], dry_run = True, delete = task['delete'], verbose=verbose)
+            
             if result['error']:
-                print(result['error'])
+                console.print(Panel(f"[bold red]Dry-run error for task {task_name}:[/bold red]\n{result['error']}", border_style="red"))
                 _ = xst.pre_post_cmds(task['umount_cmd'], verbose)
                 sys.exit(1)
-            print(f"---- Task {task_name} (dry run) ----")
-            print(task['description'])
+                
+            n_del = result['deleted'] if result['deleted'] is not None else (len(result['delete_list']) if result['delete_list'] else 0)
+            num_changes = (result['created'] or 0) + (result['transferred'] or 0) + n_del
+            
+            # Display Dry-Run details
+            dry_table = Table(title=f"Dry Run Details: {task_name}", title_style="bold green", show_header=True, border_style="dim green")
+            dry_table.add_column("Statistic", style="bold cyan")
+            dry_table.add_column("Value", style="magenta")
+            dry_table.add_row("Total Files", f"{result['files']}")
+            dry_table.add_row("To Create", f"{result['created']}")
+            dry_table.add_row("To Transfer", f"{result['transferred']}")
+            dry_table.add_row("To Delete", f"{n_del}", style="red" if n_del > 0 else "")
+            console.print(Panel(dry_table, border_style="green"))
+            
             if verbose:
                 if result['file_list']:
-                    print("Files to be transferred:")
+                    console.print("[yellow]Files to be transferred:[/yellow]")
                     for file in result['file_list']:
-                        print(f"  {file}")
+                        console.print(f"  {file}")
                 if result['delete_list']:
-                    print("---------------------------")
-                    print("Files to be deleted:")
+                    console.print("---------------------------")
+                    console.print("[red]Files to be deleted:[/red]")
                     for file in result['delete_list']:
-                        print(f"  {file}")
+                        console.print(f"  {file}")
             
-            if result['delete_list'] is not None:
-                n_del = len(result['delete_list'])
-            else:
-                n_del = 0
-            if result['deleted'] is not None:
-                n_del = result['deleted']
-            print(f"Files:        {result['files']}")
-            print(f"Created:      {result['created']}")
-            print(f"Transferred:  {result['transferred']}")
-            print(f"Deleted:      {n_del}")
-            num_changes = 0
-            if result['created']:
-                num_changes += result['created']
-            if result['transferred']:
-                num_changes += result['transferred']
-            num_changes += n_del
             if num_changes == 0:
-                print("No changes")
+                console.print("[bold green]✔ No changes detected. Task is up to date.[/bold green]")
                 summary['ok_tasks'] += 1
                 summary['ok_task_names'].append(task_name)
                 _ = xst.pre_post_cmds(task['umount_cmd'], verbose)
                 continue
+                
             if n_del > 0:
-                print(f"Continue? WARNING DELETING {n_del} FILES (y/n): ", end="")
+                prompt_msg = f"[bold red]WARNING: THIS WILL DELETE {n_del} FILES![/bold red] Continue?"
             else:
-                print("Continue? (y/n): ", end="")
-            ans = input()
-            if ans != "y":
+                prompt_msg = "Continue?"
+            
+            ans = Confirm.ask(prompt_msg, default=True)
+            if not ans:
+                console.print(f"[bold yellow]⚠ Skipped task [green]{task_name}[/green] (cancelled by user)[/bold yellow]")
                 summary['skipped_tasks'] += 1
                 summary['skipped_task_names'].append(task_name)
                 _ = xst.pre_post_cmds(task['umount_cmd'], verbose)
                 continue
 
-        result = xst.rsync_backup(task['src'], task['dst'], excludes=task['excludes'], extensions=task['extensions'], options=task['options'], dry_run = False, delete = task['delete'])
-        print(f"---- Task {task_name} ----")
+        # Execute the actual sync with progress updates
+        progress = Progress(
+            SpinnerColumn(spinner_name="dots"),
+            TextColumn("[bold blue]{task.description}"),
+            BarColumn(bar_width=40),
+            TaskProgressColumn(),
+            TimeRemainingColumn(),
+            TransferSpeedColumn(),
+            TextColumn("[dim]{task.fields[current_file]}", justify="left")
+        )
+        
+        task_id = progress.add_task(f"Syncing {task_name}", total=None, current_file="")
+        
+        def progress_callback(event: dict[str, Any]) -> None:
+            if event['type'] == 'progress':
+                curr_file = event['current_file'] or ""
+                if len(curr_file) > 40:
+                    curr_file = "..." + curr_file[-37:]
+                
+                if event['to_chk_total'] is not None and event['to_chk_current'] is not None:
+                    tot = event['to_chk_total']
+                    chk = tot - event['to_chk_current']
+                    if tot > 0 and chk >= 0:
+                        progress.update(
+                            task_id,
+                            completed=chk,
+                            total=tot,
+                            current_file=f"[green]{curr_file}[/green] ({chk}/{tot}) [yellow]{event['speed']}[/yellow]"
+                        )
+                    else:
+                        progress.update(
+                            task_id,
+                            current_file=f"[green]{curr_file}[/green] [yellow]{event['speed']}[/yellow]"
+                        )
+                else:
+                    if event['percent'] is not None:
+                        progress.update(
+                            task_id,
+                            completed=event['percent'],
+                            total=100,
+                            current_file=f"[green]{curr_file}[/green] ({event['percent']}%) [yellow]{event['speed']}[/yellow]"
+                        )
+                    else:
+                        progress.update(
+                            task_id,
+                            current_file=f"[green]{curr_file}[/green] [yellow]{event['speed']}[/yellow]"
+                        )
+            elif event['type'] == 'file':
+                curr_file = event['filename']
+                if len(curr_file) > 40:
+                    curr_file = "..." + curr_file[-37:]
+                progress.update(task_id, current_file=f"[green]{curr_file}[/green]")
+            elif event['type'] == 'delete':
+                curr_file = event['filename']
+                if len(curr_file) > 40:
+                    curr_file = "..." + curr_file[-37:]
+                progress.update(task_id, current_file=f"[red]Deleting {curr_file}[/red]")
+
+        with progress:
+            result = xst.rsync_backup(task['src'], task['dst'], excludes=task['excludes'], extensions=task['extensions'], options=task['options'], dry_run = False, delete = task['delete'], verbose=verbose, progress_callback=progress_callback)
+            # Ensure the progress bar completes cleanly
+            progress.update(task_id, completed=100, total=100, current_file="Finished")
+
         if result['error']:
-            print(f"Error: {result['error']}")
+            console.print(Panel(f"[bold red]Sync error for task {task_name}:[/bold red]\n{result['error']}", border_style="red"))
             summary['error_tasks'] += 1
             summary['error_task_names'].append(task_name)
             _ = xst.pre_post_cmds(task['umount_cmd'], verbose)
             continue
-        if cast(bool, args.verbose):
+            
+        if verbose:
             if result['file_list']:
-                print("Files transferred:")
+                console.print("[yellow]Files transferred:[/yellow]")
                 for file in result['file_list']:
-                    print(f"  {file}")
+                    console.print(f"  {file}")
             if result['delete_list']:
-                print("Files deleted:")
+                console.print("[red]Files deleted:[/red]")
                 for file in result['delete_list']:
-                    print(f"  {file}")
-        if result['delete_list'] is not None:
-            n_del = len(result['delete_list'])
-        else:
-            n_del = 0
-        if result['deleted'] is not None:
-            n_del = result['deleted']
-        print(f"Files:        {result['files']}")
-        print(f"Created:      {result['created']}")
-        print(f"Transferred:  {result['transferred']}")
-        print(f"Deleted:      {n_del}")
+                    console.print(f"  {file}")
+                    
+        n_del = result['deleted'] if result['deleted'] is not None else (len(result['delete_list']) if result['delete_list'] else 0)
+        
+        comp_table = Table(show_header=False, border_style="dim cyan")
+        comp_table.add_row("Files Processed", f"{result['files']}")
+        comp_table.add_row("Created", f"[green]{result['created']}[/green]")
+        comp_table.add_row("Transferred", f"[yellow]{result['transferred']}[/yellow]")
+        comp_table.add_row("Deleted", f"[red]{n_del}[/red]" if n_del > 0 else "0")
+        console.print(Panel(comp_table, border_style="cyan", title=f"[bold cyan]✔ Task {task_name} Completed Successfully[/bold cyan]"))
+        
         summary['ok_tasks'] += 1
         summary['ok_task_names'].append(task_name)
         if result['files']:
@@ -243,14 +360,31 @@ def main():
         _ = xst.pre_post_cmds(task['umount_cmd'], verbose)
 
     if len(task_names) > 1:
-        print("==== Summary ====")
-        print(f"OK tasks:       {summary['ok_tasks']}: {summary['ok_task_names']}")
-        print(f"Skipped tasks:  {summary['skipped_tasks']}: {summary['skipped_task_names']}")
-        print(f"Error tasks:    {summary['error_tasks']}: {summary['error_task_names']}")
-        print(f"Files:          {summary['files']}")
-        print(f"Created:        {summary['created']}")
-        print(f"Transferred:    {summary['transferred']}")
-        print(f"Deleted:        {summary['deleted']}")
+        summary_table = Table(title="Sync Run Summary", title_style="bold bright_magenta", border_style="bright_magenta")
+        summary_table.add_column("Metric", style="bold cyan")
+        summary_table.add_column("Result", style="white")
+        
+        ok_str = f"[bold green]{summary['ok_tasks']}[/bold green]"
+        if summary['ok_task_names']:
+            ok_str += f" ({', '.join(summary['ok_task_names'])})"
+            
+        skipped_str = f"[bold yellow]{summary['skipped_tasks']}[/bold yellow]"
+        if summary['skipped_task_names']:
+            skipped_str += f" ({', '.join(summary['skipped_task_names'])})"
+            
+        error_str = f"[bold red]{summary['error_tasks']}[/bold red]"
+        if summary['error_task_names']:
+            error_str += f" ({', '.join(summary['error_task_names'])})"
+
+        summary_table.add_row("Successful Tasks", ok_str)
+        summary_table.add_row("Skipped Tasks", skipped_str)
+        summary_table.add_row("Failed Tasks", error_str)
+        summary_table.add_row("Total Files Checked", f"{summary['files']}")
+        summary_table.add_row("Total Created", f"[green]{summary['created']}[/green]")
+        summary_table.add_row("Total Transferred", f"[yellow]{summary['transferred']}[/yellow]")
+        summary_table.add_row("Total Deleted", f"[red]{summary['deleted']}[/red]" if summary['deleted'] > 0 else "0")
+        
+        console.print(Panel(summary_table, border_style="bright_magenta", expand=False))
 
 if __name__ == "__main__":
     main()
