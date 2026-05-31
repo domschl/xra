@@ -203,40 +203,41 @@ def main() -> None:
                 _ = xst.pre_post_cmds(task['umount_cmd'], verbose)
                 continue
 
+        dry_run_result = None
         if args.no_confirm is False:     
             if verbose:
                 console.print(f"[dim]Dry run: {src} ➔ {dst}[/dim]")
             
             with console.status(f"[bold yellow]Performing dry-run check...[/bold yellow]", spinner="dots"):
-                result = xst.rsync_backup(task['src'], task['dst'], excludes=task['excludes'], extensions=task['extensions'], options=task['options'], dry_run = True, delete = task['delete'], verbose=verbose)
+                dry_run_result = xst.rsync_backup(task['src'], task['dst'], excludes=task['excludes'], extensions=task['extensions'], options=task['options'], dry_run = True, delete = task['delete'], verbose=verbose)
             
-            if result['error']:
-                console.print(Panel(f"[bold red]Dry-run error for task {task_name}:[/bold red]\n{result['error']}", border_style="red"))
+            if dry_run_result['error']:
+                console.print(Panel(f"[bold red]Dry-run error for task {task_name}:[/bold red]\n{dry_run_result['error']}", border_style="red"))
                 _ = xst.pre_post_cmds(task['umount_cmd'], verbose)
                 sys.exit(1)
                 
-            n_del = result['deleted'] if result['deleted'] is not None else (len(result['delete_list']) if result['delete_list'] else 0)
-            num_changes = (result['created'] or 0) + (result['transferred'] or 0) + n_del
+            n_del = dry_run_result['deleted'] if dry_run_result['deleted'] is not None else (len(dry_run_result['delete_list']) if dry_run_result['delete_list'] else 0)
+            num_changes = (dry_run_result['created'] or 0) + (dry_run_result['transferred'] or 0) + n_del
             
             # Display Dry-Run details
             dry_table = Table(title=f"Dry Run Details: {task_name}", title_style="bold green", show_header=True, border_style="dim green")
             dry_table.add_column("Statistic", style="bold cyan")
             dry_table.add_column("Value", style="magenta")
-            dry_table.add_row("Total Files", f"{result['files']}")
-            dry_table.add_row("To Create", f"{result['created']}")
-            dry_table.add_row("To Transfer", f"{result['transferred']}")
+            dry_table.add_row("Total Files", f"{dry_run_result['files']}")
+            dry_table.add_row("To Create", f"{dry_run_result['created']}")
+            dry_table.add_row("To Transfer", f"{dry_run_result['transferred']}")
             dry_table.add_row("To Delete", f"{n_del}", style="red" if n_del > 0 else "")
             console.print(Panel(dry_table, border_style="green"))
             
             if verbose:
-                if result['file_list']:
+                if dry_run_result['file_list']:
                     console.print("[yellow]Files to be transferred:[/yellow]")
-                    for file in result['file_list']:
+                    for file in dry_run_result['file_list']:
                         console.print(f"  {file}")
-                if result['delete_list']:
+                if dry_run_result['delete_list']:
                     console.print("---------------------------")
                     console.print("[red]Files to be deleted:[/red]")
-                    for file in result['delete_list']:
+                    for file in dry_run_result['delete_list']:
                         console.print(f"  {file}")
             
             if num_changes == 0:
@@ -272,50 +273,79 @@ def main() -> None:
         
         task_id = progress.add_task(f"Syncing {task_name}", total=None, current_file="")
         
+        # Track overall progress state to prevent jumping bar length
+        state: dict[str, Any] = {
+            'completed': 0,
+            'total': None,
+            'processed_files': set()
+        }
+        
+        # Pre-populate total count if dry run was executed and yielded files
+        if args.no_confirm is False and dry_run_result and not dry_run_result.get('error'):
+            dry_files = (dry_run_result.get('file_list') or []) + (dry_run_result.get('delete_list') or [])
+            if dry_files:
+                state['total'] = len(dry_files)
+        
         def progress_callback(event: dict[str, Any]) -> None:
             if event['type'] == 'progress':
                 curr_file = event['current_file'] or ""
                 if len(curr_file) > 40:
                     curr_file = "..." + curr_file[-37:]
                 
+                # Update task-wide completion if rsync to_chk fields are populated
                 if event['to_chk_total'] is not None and event['to_chk_current'] is not None:
                     tot = event['to_chk_total']
                     chk = tot - event['to_chk_current']
                     if tot > 0 and chk >= 0:
-                        progress.update(
-                            task_id,
-                            completed=chk,
-                            total=tot,
-                            current_file=f"[green]{curr_file}[/green] ({chk}/{tot}) [yellow]{event['speed']}[/yellow]"
-                        )
-                    else:
-                        progress.update(
-                            task_id,
-                            current_file=f"[green]{curr_file}[/green] [yellow]{event['speed']}[/yellow]"
-                        )
-                else:
-                    if event['percent'] is not None:
-                        progress.update(
-                            task_id,
-                            completed=event['percent'],
-                            total=100,
-                            current_file=f"[green]{curr_file}[/green] ({event['percent']}%) [yellow]{event['speed']}[/yellow]"
-                        )
-                    else:
-                        progress.update(
-                            task_id,
-                            current_file=f"[green]{curr_file}[/green] [yellow]{event['speed']}[/yellow]"
-                        )
+                        state['total'] = tot
+                        state['completed'] = chk
+                
+                status_msg = f"[green]{curr_file}[/green]"
+                if event['percent'] is not None:
+                    status_msg += f" ({event['percent']}%)"
+                if event['speed']:
+                    status_msg += f" [yellow]{event['speed']}[/yellow]"
+                
+                if state['total'] is not None:
+                    status_msg += f" ({state['completed']}/{state['total']})"
+                
+                progress.update(
+                    task_id,
+                    completed=state['completed'],
+                    total=state['total'],
+                    current_file=status_msg
+                )
             elif event['type'] == 'file':
                 curr_file = event['filename']
+                if curr_file not in state['processed_files']:
+                    state['processed_files'].add(curr_file)
+                    # If we don't have to_chk info but have a total, increment step-by-step
+                    if event.get('to_chk_total') is None and state['total'] is not None:
+                        state['completed'] = min(state['completed'] + 1, state['total'])
+                
                 if len(curr_file) > 40:
                     curr_file = "..." + curr_file[-37:]
-                progress.update(task_id, current_file=f"[green]{curr_file}[/green]")
+                
+                status_msg = f"[green]{curr_file}[/green]"
+                if state['total'] is not None:
+                    status_msg += f" ({state['completed']}/{state['total']})"
+                
+                progress.update(task_id, completed=state['completed'], total=state['total'], current_file=status_msg)
             elif event['type'] == 'delete':
                 curr_file = event['filename']
+                if curr_file not in state['processed_files']:
+                    state['processed_files'].add(curr_file)
+                    if event.get('to_chk_total') is None and state['total'] is not None:
+                        state['completed'] = min(state['completed'] + 1, state['total'])
+                
                 if len(curr_file) > 40:
                     curr_file = "..." + curr_file[-37:]
-                progress.update(task_id, current_file=f"[red]Deleting {curr_file}[/red]")
+                
+                status_msg = f"[red]Deleting {curr_file}[/red]"
+                if state['total'] is not None:
+                    status_msg += f" ({state['completed']}/{state['total']})"
+                
+                progress.update(task_id, completed=state['completed'], total=state['total'], current_file=status_msg)
 
         with progress:
             result = xst.rsync_backup(task['src'], task['dst'], excludes=task['excludes'], extensions=task['extensions'], options=task['options'], dry_run = False, delete = task['delete'], verbose=verbose, progress_callback=progress_callback)
