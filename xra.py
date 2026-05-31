@@ -392,7 +392,8 @@ def main() -> None:
         comp_table.add_row("Created", f"[green]{result['created']}[/green]")
         comp_table.add_row("Transferred", f"[yellow]{result['transferred']}[/yellow]")
         comp_table.add_row("Deleted", f"[red]{n_del}[/red]" if n_del > 0 else "0")
-        console.print(Panel(comp_table, border_style="cyan", title=f"[bold cyan]✔ Task {task_name} Completed Successfully[/bold cyan]"))
+        console.print(f"[bold cyan]✔ Task {task_name} Completed Successfully[/bold cyan]")
+        console.print(comp_table)
         
         summary['ok_tasks'] += 1
         summary['ok_task_names'].append(task_name)
