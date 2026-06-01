@@ -431,7 +431,7 @@ def main() -> None:
         summary_table.add_row("Total Transferred", f"[yellow]{summary['transferred']}[/yellow]")
         summary_table.add_row("Total Deleted", f"[red]{summary['deleted']}[/red]" if summary['deleted'] > 0 else "0")
         
-        console.print(Panel(summary_table, border_style="bright_magenta", expand=False))
+        console.print(summary_table)
 
 if __name__ == "__main__":
     main()
