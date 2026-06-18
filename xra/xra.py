@@ -11,7 +11,7 @@ from rich.text import Text
 from rich.prompt import Confirm
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn, TransferSpeedColumn
 
-from sync_task import TasksSyncer
+from xra.sync_task import TasksSyncer
 
 class SyncTaskSummary(TypedDict):
     ok_tasks: int
