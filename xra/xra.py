@@ -11,7 +11,7 @@ from rich.text import Text
 from rich.prompt import Confirm
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn, TransferSpeedColumn
 
-from xra.sync_task import TasksSyncer
+from xra.sync_task import TasksSyncer, SyncTask
 
 class SyncTaskSummary(TypedDict):
     ok_tasks: int
@@ -32,42 +32,48 @@ console = Console()
 def main() -> None:
     parser = argparse.ArgumentParser(description="Backup files using rsync")
     _ = parser.add_argument("task_name", nargs='?', type=str, default='all', help="Task name or group name or 'all'")
-    default_config = os.path.expanduser("~/.config/xra/config.json")
-    _ = parser.add_argument("--config", "-c", type=str, default=default_config, help="Config file path")
+    _ = parser.add_argument("--config", "-c", type=str, default=None, help="Config file path")
     _ = parser.add_argument("--no-confirm", "-x", action="store_true", help="Do not confirm the backup")
     _ = parser.add_argument("--verbose", "-v", action="store_true", help="Print verbose output")
     _ = parser.add_argument("--list-tasks", "-l", action="store_true", help="List available tasks")
     args = parser.parse_args()
 
     verbose = cast(bool, args.verbose)
-    config_filename = cast(str, args.config)
-    if '/' not in config_filename:
-        config_filename = os.path.expanduser("~/.config/xra/" + config_filename)
-    if config_filename.endswith('.json') is False:
-        config_filename += '.json'
-
-    xst = TasksSyncer()
     
-    if os.path.exists(config_filename):
-        console.print(f"[dim]Reading configuration: {config_filename}[/dim]")
-        config = xst.get_config(config_filename)
-    else:
-        config = {}
-        
     hostname = socket.gethostname()
     if sys.platform=="darwin" and ("-2" in hostname or "-3" in hostname):
         console.print(f"[bold red]Your local hostname became {hostname}, macOS has again changed it. Please fix this and run again![/bold red]")
         console.print("[red]Since macOS has lost the ability to change hostnames 'on the fly', you might need to reboot[/red]")
         exit(-1)
-        
-    filename = os.path.expanduser("~/.config/xra/" + hostname + ".json")
-    if os.path.exists(filename):
-        def_config = xst.get_config(filename)
-        if def_config and def_config != {}:
-            config.update(def_config)
 
-    if config == {}:
-        _ = xst.create_default_config(filename)
+    xst = TasksSyncer()
+    
+    config: dict[str, SyncTask] = {}
+    
+    if args.config is not None:
+        config_filename = cast(str, args.config)
+        if '/' not in config_filename:
+            config_filename = os.path.expanduser("~/.config/xra/" + config_filename)
+        if config_filename.endswith('.json') is False:
+            config_filename += '.json'
+            
+        if os.path.exists(config_filename):
+            console.print(f"[dim]Reading configuration: {config_filename}[/dim]")
+            config = xst.get_config(config_filename)
+    else:
+        config_filename = os.path.expanduser("~/.config/xra/config.json")
+        if os.path.exists(config_filename):
+            console.print(f"[dim]Reading configuration: {config_filename}[/dim]")
+            config = xst.get_config(config_filename)
+            
+        filename = os.path.expanduser("~/.config/xra/" + hostname + ".json")
+        if os.path.exists(filename):
+            def_config = xst.get_config(filename)
+            if def_config and def_config != {}:
+                config.update(def_config)
+
+        if config == {}:
+            _ = xst.create_default_config(filename)
         
     # Collect all valid group names
     all_groups: set[str] = set()

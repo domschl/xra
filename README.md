@@ -44,7 +44,7 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
-  --config CONFIG, -c   Config file path (default: ~/.config/xra/config.json)
+  --config CONFIG, -c   Config file path
   --no-confirm, -x      Skip dry-run confirmation
   --verbose, -v         Print verbose output (file lists, commands)
   --list-tasks, -l      List configured tasks and their details
@@ -77,9 +77,10 @@ python xra.py --config /path/to/custom.json
 
 ## Configuration
 
-Config files are stored as JSON. The default location is `~/.config/xra/config.json`.
+Config files are stored as JSON.
 
-A hostname-specific config at `~/.config/xra/<hostname>.json` is also loaded and merged (hostname config takes precedence).
+- **Explicit configuration**: If a custom config file is provided with the `-c` / `--config` option, only that file is loaded.
+- **Hostname-based approach**: If no config file is explicitly specified, the default configuration file (`~/.config/xra/config.json`) is loaded, and a hostname-specific configuration at `~/.config/xra/<hostname>.json` is loaded and merged (taking precedence) if it exists.
 
 ### Task Structure
 
