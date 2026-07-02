@@ -200,6 +200,8 @@ class TasksSyncer:
         def read_stderr(stream: Any) -> None:
             for err_line in stream:
                 stderr_lines.append(err_line)
+                # Print stderr to sys.stderr so the user can see SSH errors/prompts in real-time
+                print(err_line, end="", file=sys.stderr, flush=True)
 
         err_thread = threading.Thread(target=read_stderr, args=(proc.stderr,))
         err_thread.start()
