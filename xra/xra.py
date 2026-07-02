@@ -201,61 +201,104 @@ def main() -> None:
                 _ = xst.pre_post_cmds(task['umount_cmd'], verbose)
                 continue
 
+        # Check if remote connection requires interactive authentication
+        use_spinner = True
+        remote_host = None
+        if ':' in task['src'] and '/' not in task['src'].split(':')[0]:
+            remote_host = task['src'].split(':')[0]
+        elif ':' in task['dst'] and '/' not in task['dst'].split(':')[0]:
+            remote_host = task['dst'].split(':')[0]
+            
+        if remote_host:
+            try:
+                import subprocess
+                res = subprocess.run(
+                    ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=2", remote_host, "true"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=3
+                )
+                if res.returncode != 0:
+                    use_spinner = False
+            except Exception:
+                use_spinner = False
+
         dry_run_result = None
         if args.no_confirm is False:     
             if verbose:
                 console.print(f"[dim]Dry run: {src} ➔ {dst}[/dim]")
             
-            with console.status("[bold yellow]Performing dry-run check...[/bold yellow]", spinner="dots") as status:
-                dry_run_state = {
-                    'completed': 0,
-                    'total': None,
-                    'changes': 0,
-                    'current_file': ''
-                }
-                
-                def dry_run_progress(event: dict[str, Any]) -> None:
-                    if event['type'] == 'progress':
-                        curr_file = event['current_file'] or ""
-                        if curr_file:
-                            dry_run_state['current_file'] = curr_file
+            if use_spinner:
+                with console.status("[bold yellow]Performing dry-run check...[/bold yellow]", spinner="dots") as status:
+                    dry_run_state = {
+                        'completed': 0,
+                        'total': None,
+                        'changes': 0,
+                        'current_file': ''
+                    }
+                    
+                    def dry_run_progress(event: dict[str, Any]) -> None:
+                        if event['type'] == 'progress':
+                            curr_file = event['current_file'] or ""
+                            if curr_file:
+                                dry_run_state['current_file'] = curr_file
+                            
+                            if event['to_chk_total'] is not None and event['to_chk_current'] is not None:
+                                tot = event['to_chk_total']
+                                chk = tot - event['to_chk_current']
+                                if tot > 0 and chk >= 0:
+                                    dry_run_state['total'] = tot
+                                    dry_run_state['completed'] = chk
+                        elif event['type'] in ('file', 'delete'):
+                            dry_run_state['changes'] += 1
+                            dry_run_state['current_file'] = event['filename']
+                        elif event['type'] == 'status':
+                            dry_run_state['current_file'] = event['status']
+                        elif event['type'] == 'stderr':
+                            console.print(f"[red]{event['line']}[/red]")
+                            return
+
+                        # Format the status message
+                        msg = "[bold yellow]Performing dry-run check...[/bold yellow]"
+                        details = []
                         
-                        if event['to_chk_total'] is not None and event['to_chk_current'] is not None:
-                            tot = event['to_chk_total']
-                            chk = tot - event['to_chk_current']
-                            if tot > 0 and chk >= 0:
-                                dry_run_state['total'] = tot
-                                dry_run_state['completed'] = chk
-                    elif event['type'] in ('file', 'delete'):
-                        dry_run_state['changes'] += 1
-                        dry_run_state['current_file'] = event['filename']
-                    elif event['type'] == 'status':
-                        dry_run_state['current_file'] = event['status']
+                        if dry_run_state['total'] is not None:
+                            pct = int(dry_run_state['completed'] / dry_run_state['total'] * 100) if dry_run_state['total'] > 0 else 100
+                            details.append(f"{dry_run_state['completed']}/{dry_run_state['total']} checked ({pct}%)")
+                        
+                        if dry_run_state['changes'] > 0:
+                            details.append(f"{dry_run_state['changes']} changes found")
+                        
+                        if details:
+                            msg += f" ({', '.join(details)})"
+                        
+                        if dry_run_state['current_file']:
+                            display_file = dry_run_state['current_file']
+                            if len(display_file) > 40:
+                                display_file = display_file[:18] + "..." + display_file[-19:]
+                            msg += f" [dim][green]{display_file}[/green][/dim]"
+                        
+                        status.update(msg)
+
+                    dry_run_result = xst.rsync_backup(
+                        task['src'], task['dst'],
+                        excludes=task['excludes'],
+                        extensions=task['extensions'],
+                        options=task['options'],
+                        dry_run=True,
+                        delete=task['delete'],
+                        verbose=verbose,
+                        progress_callback=dry_run_progress
+                    )
+            else:
+                console.print("[bold yellow]Performing dry-run check (interactive auth may be required)...[/bold yellow]")
+                
+                def dry_run_static_progress(event: dict[str, Any]) -> None:
+                    if event['type'] in ('file', 'delete'):
+                        prefix = "[red]Delete:[/red]" if event['type'] == 'delete' else "[green]Change:[/green]"
+                        console.print(f"  {prefix} {event['filename']}")
                     elif event['type'] == 'stderr':
                         console.print(f"[red]{event['line']}[/red]")
-                        return
-
-                    # Format the status message
-                    msg = "[bold yellow]Performing dry-run check...[/bold yellow]"
-                    details = []
-                    
-                    if dry_run_state['total'] is not None:
-                        pct = int(dry_run_state['completed'] / dry_run_state['total'] * 100) if dry_run_state['total'] > 0 else 100
-                        details.append(f"{dry_run_state['completed']}/{dry_run_state['total']} checked ({pct}%)")
-                    
-                    if dry_run_state['changes'] > 0:
-                        details.append(f"{dry_run_state['changes']} changes found")
-                    
-                    if details:
-                        msg += f" ({', '.join(details)})"
-                    
-                    if dry_run_state['current_file']:
-                        display_file = dry_run_state['current_file']
-                        if len(display_file) > 40:
-                            display_file = display_file[:18] + "..." + display_file[-19:]
-                        msg += f" [dim][green]{display_file}[/green][/dim]"
-                    
-                    status.update(msg)
 
                 dry_run_result = xst.rsync_backup(
                     task['src'], task['dst'],
@@ -265,7 +308,7 @@ def main() -> None:
                     dry_run=True,
                     delete=task['delete'],
                     verbose=verbose,
-                    progress_callback=dry_run_progress
+                    progress_callback=dry_run_static_progress
                 )
             
             if dry_run_result['error']:
@@ -444,10 +487,21 @@ def main() -> None:
                 
                 progress.update(task_id, completed=state['completed'], total=state['total'], current_file=status_msg)
 
-        with progress:
-            result = xst.rsync_backup(task['src'], task['dst'], excludes=task['excludes'], extensions=task['extensions'], options=task['options'], dry_run = False, delete = task['delete'], verbose=verbose, progress_callback=progress_callback)
-            # Ensure the progress bar completes cleanly
-            progress.update(task_id, completed=100, total=100, current_file="Finished")
+        if use_spinner:
+            with progress:
+                result = xst.rsync_backup(task['src'], task['dst'], excludes=task['excludes'], extensions=task['extensions'], options=task['options'], dry_run = False, delete = task['delete'], verbose=verbose, progress_callback=progress_callback)
+                # Ensure the progress bar completes cleanly
+                progress.update(task_id, completed=100, total=100, current_file="Finished")
+        else:
+            console.print("[bold yellow]Syncing (interactive auth may be required)...[/bold yellow]")
+            def sync_static_progress(event: dict[str, Any]) -> None:
+                if event['type'] in ('file', 'delete'):
+                    prefix = "[red]Delete:[/red]" if event['type'] == 'delete' else "[green]Syncing:[/green]"
+                    console.print(f"  {prefix} {event['filename']}")
+                elif event['type'] == 'stderr':
+                    console.print(f"[red]{event['line']}[/red]")
+
+            result = xst.rsync_backup(task['src'], task['dst'], excludes=task['excludes'], extensions=task['extensions'], options=task['options'], dry_run = False, delete = task['delete'], verbose=verbose, progress_callback=sync_static_progress)
 
         if result['error']:
             console.print(Panel(f"[bold red]Sync error for task {task_name}:[/bold red]\n{result['error']}", border_style="red"))
