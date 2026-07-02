@@ -124,10 +124,6 @@ class TasksSyncer:
             if homebrew_rsync:
                 if rsync_cmd[0] == "rsync":
                     rsync_cmd[0] = homebrew_rsync
-                
-                # Automatically append --rsync-path for remote sync if not already present
-                if (':' in src or ':' in dst) and not any(opt.startswith('--rsync-path') for opt in rsync_cmd):
-                    rsync_cmd.append(f"--rsync-path={homebrew_rsync}")
             else:
                 if not TasksSyncer._rsync_warned:
                     print("Warning: Homebrew rsync not found. Using system rsync which may be outdated (v2.6.9).", file=sys.stderr)
