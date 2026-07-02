@@ -136,6 +136,10 @@ class TasksSyncer:
                 rsync_cmd.remove("--no-iconv")
             elif not any(opt.startswith('--iconv') for opt in rsync_cmd):
                 rsync_cmd.append("--iconv=utf-8-mac,utf-8")
+
+        # Automatically use BatchMode for SSH to prevent infinite hangs on password prompts
+        if (':' in src or ':' in dst) and not any(opt.startswith('-e') for opt in rsync_cmd):
+            rsync_cmd += ["-e", "ssh -o BatchMode=yes"]
         if (excludes is not None and excludes != []) or (extensions is not None and extensions != []):
             if options is None:
                 options = []
@@ -200,8 +204,14 @@ class TasksSyncer:
         def read_stderr(stream: Any) -> None:
             for err_line in stream:
                 stderr_lines.append(err_line)
-                # Print stderr to sys.stderr so the user can see SSH errors/prompts in real-time
-                print(err_line, end="", file=sys.stderr, flush=True)
+                # Forward to progress callback if set, otherwise print to sys.stderr
+                if progress_callback:
+                    progress_callback({
+                        'type': 'stderr',
+                        'line': err_line.rstrip('\r\n')
+                    })
+                else:
+                    print(err_line, end="", file=sys.stderr, flush=True)
 
         err_thread = threading.Thread(target=read_stderr, args=(proc.stderr,))
         err_thread.start()

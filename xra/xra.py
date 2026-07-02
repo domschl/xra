@@ -231,6 +231,9 @@ def main() -> None:
                         dry_run_state['current_file'] = event['filename']
                     elif event['type'] == 'status':
                         dry_run_state['current_file'] = event['status']
+                    elif event['type'] == 'stderr':
+                        console.print(f"[red]{event['line']}[/red]")
+                        return
 
                     # Format the status message
                     msg = "[bold yellow]Performing dry-run check...[/bold yellow]"
@@ -379,6 +382,8 @@ def main() -> None:
                     total=state['total'],
                     current_file=status_msg
                 )
+            elif event['type'] == 'stderr':
+                console.print(f"[red]{event['line']}[/red]")
             elif event['type'] == 'status':
                 display_status = event['status']
                 if len(display_status) > 30:
