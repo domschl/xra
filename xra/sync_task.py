@@ -36,6 +36,8 @@ class SyncTask(TypedDict):
 
 
 class TasksSyncer:
+    _rsync_warned = False
+
     def __init__(self):
         pass
 
@@ -111,9 +113,32 @@ class TasksSyncer:
             if "--stats" not in rsync_cmd:
                 rsync_cmd.append("--stats")
 
+        # On macOS, default to Homebrew's rsync binary if available
+        if sys.platform == "darwin":
+            homebrew_rsync = None
+            for path in ["/opt/homebrew/bin/rsync", "/usr/local/bin/rsync"]:
+                if os.path.exists(path):
+                    homebrew_rsync = path
+                    break
+            
+            if homebrew_rsync:
+                if rsync_cmd[0] == "rsync":
+                    rsync_cmd[0] = homebrew_rsync
+                
+                # Automatically append --rsync-path for remote sync if not already present
+                if (':' in src or ':' in dst) and not any(opt.startswith('--rsync-path') for opt in rsync_cmd):
+                    rsync_cmd.append(f"--rsync-path={homebrew_rsync}")
+            else:
+                if not TasksSyncer._rsync_warned:
+                    print("Warning: Homebrew rsync not found. Using system rsync which may be outdated (v2.6.9).", file=sys.stderr)
+                    print("Install it with: brew install rsync", file=sys.stderr)
+                    TasksSyncer._rsync_warned = True
+
         # Automatically handle Unicode normalization for macOS/Linux sync
         if sys.platform == "darwin" and (':' in src or ':' in dst): # or src.startswith('/Volumes/') or dst.startswith("/Volumes/")):
-            if not any(opt.startswith('--iconv') for opt in rsync_cmd):
+            if "--no-iconv" in rsync_cmd:
+                rsync_cmd.remove("--no-iconv")
+            elif not any(opt.startswith('--iconv') for opt in rsync_cmd):
                 rsync_cmd.append("--iconv=utf-8-mac,utf-8")
         if (excludes is not None and excludes != []) or (extensions is not None and extensions != []):
             if options is None:
