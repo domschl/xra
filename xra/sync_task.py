@@ -132,11 +132,11 @@ class TasksSyncer:
                         rsync_cmd += [f"--exclude={exclude}"]
         if dry_run:
             rsync_cmd.append("--dry-run")
-        else:
-            # If doing real run and progress callback is set, ensure we request progress updates
-            if progress_callback is not None:
-                if "-P" not in rsync_cmd and "--progress" not in rsync_cmd and "--info=progress2" not in rsync_cmd:
-                    rsync_cmd.append("--progress")
+        
+        # If progress callback is set, ensure we request progress updates
+        if progress_callback is not None:
+            if "-P" not in rsync_cmd and "--progress" not in rsync_cmd and "--info=progress2" not in rsync_cmd:
+                rsync_cmd.append("--progress")
 
         if src[-1] != "/":
             if verbose:
@@ -218,10 +218,16 @@ class TasksSyncer:
                         })
                     continue
                 
-                # Ignore system messages and stats lines
-                if (stripped.startswith("building file list") or 
-                    stripped.startswith("sending incremental file list") or 
-                    stripped.startswith("created directory") or
+                # Handle status/system messages
+                if stripped.startswith("building file list") or stripped.startswith("sending incremental file list"):
+                    if progress_callback:
+                        progress_callback({
+                            'type': 'status',
+                            'status': stripped
+                        })
+                    continue
+
+                if (stripped.startswith("created directory") or
                     stripped.startswith("rsync:") or
                     stripped.startswith("rsync error:")):
                     continue

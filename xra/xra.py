@@ -206,8 +206,64 @@ def main() -> None:
             if verbose:
                 console.print(f"[dim]Dry run: {src} ➔ {dst}[/dim]")
             
-            with console.status(f"[bold yellow]Performing dry-run check...[/bold yellow]", spinner="dots"):
-                dry_run_result = xst.rsync_backup(task['src'], task['dst'], excludes=task['excludes'], extensions=task['extensions'], options=task['options'], dry_run = True, delete = task['delete'], verbose=verbose)
+            with console.status("[bold yellow]Performing dry-run check...[/bold yellow]", spinner="dots") as status:
+                dry_run_state = {
+                    'completed': 0,
+                    'total': None,
+                    'changes': 0,
+                    'current_file': ''
+                }
+                
+                def dry_run_progress(event: dict[str, Any]) -> None:
+                    if event['type'] == 'progress':
+                        curr_file = event['current_file'] or ""
+                        if curr_file:
+                            dry_run_state['current_file'] = curr_file
+                        
+                        if event['to_chk_total'] is not None and event['to_chk_current'] is not None:
+                            tot = event['to_chk_total']
+                            chk = tot - event['to_chk_current']
+                            if tot > 0 and chk >= 0:
+                                dry_run_state['total'] = tot
+                                dry_run_state['completed'] = chk
+                    elif event['type'] in ('file', 'delete'):
+                        dry_run_state['changes'] += 1
+                        dry_run_state['current_file'] = event['filename']
+                    elif event['type'] == 'status':
+                        dry_run_state['current_file'] = event['status']
+
+                    # Format the status message
+                    msg = "[bold yellow]Performing dry-run check...[/bold yellow]"
+                    details = []
+                    
+                    if dry_run_state['total'] is not None:
+                        pct = int(dry_run_state['completed'] / dry_run_state['total'] * 100) if dry_run_state['total'] > 0 else 100
+                        details.append(f"{dry_run_state['completed']}/{dry_run_state['total']} checked ({pct}%)")
+                    
+                    if dry_run_state['changes'] > 0:
+                        details.append(f"{dry_run_state['changes']} changes found")
+                    
+                    if details:
+                        msg += f" ({', '.join(details)})"
+                    
+                    if dry_run_state['current_file']:
+                        display_file = dry_run_state['current_file']
+                        if len(display_file) > 40:
+                            display_file = display_file[:18] + "..." + display_file[-19:]
+                        msg += f" [dim][green]{display_file}[/green][/dim]"
+                    
+                    status.update(msg)
+
+                dry_run_result = xst.rsync_backup(
+                    task['src'], task['dst'],
+                    excludes=task['excludes'],
+                    extensions=task['extensions'],
+                    options=task['options'],
+                    dry_run=True,
+                    delete=task['delete'],
+                    verbose=verbose,
+                    progress_callback=dry_run_progress
+                )
             
             if dry_run_result['error']:
                 console.print(Panel(f"[bold red]Dry-run error for task {task_name}:[/bold red]\n{dry_run_result['error']}", border_style="red"))
@@ -323,6 +379,20 @@ def main() -> None:
                     total=state['total'],
                     current_file=status_msg
                 )
+            elif event['type'] == 'status':
+                display_status = event['status']
+                if len(display_status) > 30:
+                    display_status = display_status[:13] + "..." + display_status[-14:]
+                display_status = f"{display_status:<30}"
+                
+                if state['total'] is not None:
+                    count_str = f"({state['completed']}/{state['total']})"
+                else:
+                    count_str = ""
+                count_str = f"{count_str:>12}"
+                
+                status_msg = f"[dim][yellow]{display_status}[/yellow]        [yellow]{count_str}[/yellow][/dim]"
+                progress.update(task_id, completed=state['completed'], total=state['total'], current_file=status_msg)
             elif event['type'] == 'file':
                 curr_file = event['filename']
                 if curr_file not in state['processed_files']:
