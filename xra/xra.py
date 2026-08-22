@@ -247,7 +247,7 @@ def main() -> None:
                                 tot = event['to_chk_total']
                                 chk = tot - event['to_chk_current']
                                 if tot > 0 and chk >= 0:
-                                    dry_run_state['total'] = tot
+                                    dry_run_state['total'] = max(dry_run_state['total'] or 0, tot)
                                     dry_run_state['completed'] = chk
                         elif event['type'] in ('file', 'delete'):
                             dry_run_state['changes'] += 1
@@ -375,14 +375,14 @@ def main() -> None:
         state: dict[str, Any] = {
             'completed': 0,
             'total': None,
+            'has_to_chk': False,
             'processed_files': set()
         }
         
         # Pre-populate total count if dry run was executed and yielded files
         if args.no_confirm is False and dry_run_result and not dry_run_result.get('error'):
-            dry_files = (dry_run_result.get('file_list') or []) + (dry_run_result.get('delete_list') or [])
-            if dry_files:
-                state['total'] = len(dry_files)
+            if dry_run_result.get('files'):
+                state['total'] = dry_run_result['files']
         
         def progress_callback(event: dict[str, Any]) -> None:
             if event['type'] == 'progress':
@@ -393,7 +393,8 @@ def main() -> None:
                     tot = event['to_chk_total']
                     chk = tot - event['to_chk_current']
                     if tot > 0 and chk >= 0:
-                        state['total'] = tot
+                        state['has_to_chk'] = True
+                        state['total'] = max(state['total'] or 0, tot)
                         state['completed'] = chk
                 
                 # Format fixed-width filename (exactly 30 chars)
@@ -446,7 +447,7 @@ def main() -> None:
                 if curr_file not in state['processed_files']:
                     state['processed_files'].add(curr_file)
                     # If we don't have to_chk info but have a total, increment step-by-step
-                    if event.get('to_chk_total') is None and state['total'] is not None:
+                    if not state['has_to_chk'] and state['total'] is not None:
                         state['completed'] = min(state['completed'] + 1, state['total'])
                 
                 display_name = curr_file
@@ -468,7 +469,7 @@ def main() -> None:
                 curr_file = event['filename']
                 if curr_file not in state['processed_files']:
                     state['processed_files'].add(curr_file)
-                    if event.get('to_chk_total') is None and state['total'] is not None:
+                    if not state['has_to_chk'] and state['total'] is not None:
                         state['completed'] = min(state['completed'] + 1, state['total'])
                 
                 display_name = curr_file
@@ -491,7 +492,8 @@ def main() -> None:
             with progress:
                 result = xst.rsync_backup(task['src'], task['dst'], excludes=task['excludes'], extensions=task['extensions'], options=task['options'], dry_run = False, delete = task['delete'], verbose=verbose, progress_callback=progress_callback)
                 # Ensure the progress bar completes cleanly
-                progress.update(task_id, completed=100, total=100, current_file="Finished")
+                final_total = state['total'] if state['total'] is not None else 100
+                progress.update(task_id, completed=final_total, total=final_total, current_file="Finished")
         else:
             console.print("[bold yellow]Syncing (interactive auth may be required)...[/bold yellow]")
             def sync_static_progress(event: dict[str, Any]) -> None:

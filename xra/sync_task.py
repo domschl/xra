@@ -37,9 +37,23 @@ class SyncTask(TypedDict):
 
 class TasksSyncer:
     _rsync_warned = False
+    _supports_no_inc_rec_cache: dict[str, bool] = {}
 
     def __init__(self):
         pass
+
+    @classmethod
+    def supports_no_inc_recursive(cls, rsync_bin: str = "rsync") -> bool:
+        if rsync_bin in cls._supports_no_inc_rec_cache:
+            return cls._supports_no_inc_rec_cache[rsync_bin]
+        try:
+            res = subprocess.run([rsync_bin, "--no-inc-recursive", "--version"],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+            supported = (res.returncode == 0)
+        except Exception:
+            supported = False
+        cls._supports_no_inc_rec_cache[rsync_bin] = supported
+        return supported
 
     @staticmethod
     def get_local_disk_info(path: str):
@@ -159,6 +173,11 @@ class TasksSyncer:
         if progress_callback is not None:
             if "-P" not in rsync_cmd and "--progress" not in rsync_cmd and "--info=progress2" not in rsync_cmd:
                 rsync_cmd.append("--progress")
+
+        # Disable incremental recursion when supported to ensure accurate file counting and progress estimation
+        if TasksSyncer.supports_no_inc_recursive(rsync_cmd[0]):
+            if not any(opt in rsync_cmd for opt in ["--no-inc-recursive", "--no-i-r", "--inc-recursive", "--i-r"]):
+                rsync_cmd.append("--no-inc-recursive")
 
         if src[-1] != "/":
             if verbose:
