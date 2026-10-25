@@ -4,3 +4,4 @@ __pycache__/
 pkg/
 src/
 *.pkg.tar.*
+xra-git/
