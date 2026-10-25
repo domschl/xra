@@ -11,6 +11,7 @@ from rich.text import Text
 from rich.prompt import Confirm
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn, TransferSpeedColumn
 
+from xra import __version__
 from xra.sync_task import TasksSyncer, SyncTask
 
 class SyncTaskSummary(TypedDict):
@@ -31,12 +32,15 @@ console = Console()
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Backup files using rsync")
+    _ = parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     _ = parser.add_argument("task_name", nargs='?', type=str, default='all', help="Task name or group name or 'all'")
     _ = parser.add_argument("--config", "-c", type=str, default=None, help="Config file path")
     _ = parser.add_argument("--no-confirm", "-x", action="store_true", help="Do not confirm the backup")
     _ = parser.add_argument("--verbose", "-v", action="store_true", help="Print verbose output")
     _ = parser.add_argument("--list-tasks", "-l", action="store_true", help="List available tasks")
     args = parser.parse_args()
+
+    console.print(f"[dim]xra {__version__}[/dim]")
 
     verbose = cast(bool, args.verbose)
     
