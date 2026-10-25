@@ -18,16 +18,16 @@ makedepends=(
   'python-installer'
   'python-wheel'
 )
-source=("$_pkgname::git+https://github.com/domschl/xra.git")
+source=("$_pkgname-git::git+https://github.com/domschl/xra.git")
 sha256sums=('SKIP')
 
 pkgver() {
-  cd "$_pkgname"
+  cd "$_pkgname-git"
   git describe --tags --abbrev=0 | sed 's/^v//'
 }
 
 prepare() {
-  cd "$_pkgname"
+  cd "$_pkgname-git"
   # build exactly the latest release tag, not the branch tip
   _tag="v$(git describe --tags --abbrev=0 | sed 's/^v//')"
   git checkout --detach "$_tag"
@@ -42,11 +42,11 @@ prepare() {
 }
 
 build() {
-  cd "$_pkgname"
+  cd "$_pkgname-git"
   python -m build --wheel --no-isolation
 }
 
 package() {
-  cd "$_pkgname"
+  cd "$_pkgname-git"
   python -m installer --destdir="$pkgdir" dist/*.whl
 }
